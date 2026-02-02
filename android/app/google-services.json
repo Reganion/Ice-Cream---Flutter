@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "272780462246",
+    "project_id": "hnr-icecream",
+    "storage_bucket": "hnr-icecream.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:272780462246:android:2c4e965330ed7f5a770c67",
+        "android_client_info": {
+          "package_name": "com.example.ice_cream"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBejYzEzWdDhW_dct1PaTOFU3shX1ghX64"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

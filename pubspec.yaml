@@ -1,0 +1,75 @@
+name: ice_cream
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: ^0.20.2
+  google_maps_flutter: ^2.7.0
+  image_picker: ^1.1.0
+  font_awesome_flutter: ^10.9.1
+  provider: ^6.1.5+1
+  http: ^1.6.0
+  material_symbols_icons: ^4.2892.0
+  connectivity_plus: ^7.0.0
+  google_fonts: 6.3.2
+  shared_preferences: ^2.2.2
+  
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0 
+  flutter_launcher_icons: ^0.14.4
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/logo.png"
+  
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - lib/client/images/landing_page/
+    - lib/client/images/CL_page/
+    - lib/client/images/home_page/
+    - lib/client/order/images/
+    - lib/client/favorite/images/
+    - lib/client/messages/images/
+    - lib/client/profile/images/
+    
+
+  fonts:
+    - family: NationalPark
+      fonts:
+        - asset: lib/client/fonts/National_Park/static/NationalPark-ExtraLight.ttf
+          weight: 200
+        - asset: lib/client/fonts/National_Park/static/NationalPark-Light.ttf
+          weight: 300
+        - asset: lib/client/fonts/National_Park/static/NationalPark-Regular.ttf
+          weight: 400
+        - asset: lib/client/fonts/National_Park/static/NationalPark-Medium.ttf
+          weight: 500
+        - asset: lib/client/fonts/National_Park/static/NationalPark-SemiBold.ttf
+          weight: 600
+        - asset: lib/client/fonts/National_Park/static/NationalPark-Bold.ttf
+          weight: 700
+        - asset: lib/client/fonts/National_Park/static/NationalPark-ExtraBold.ttf
+          weight: 800
+    - family: Inter
+      fonts:
+        - asset: lib/client/fonts/Inter/static/Inter_28pt-ExtraBold.ttf
+          weight: 800
+        - asset: lib/client/fonts/Inter/static/Inter_18pt-Thin.ttf
+          weight: 100
+          
+        
+
+
