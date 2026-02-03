@@ -1,4 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/client/order/menu.dart';
+import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
 class CartPage extends StatefulWidget {
@@ -8,83 +14,137 @@ class CartPage extends StatefulWidget {
   _CartPageState createState() => _CartPageState();
 }
 
+/// Cart item from API: id, quantity, flavor (name, image), gallon (size, addon_price), line_total.
 class CartItem {
+  final int id;
+  int quantity;
   final String name;
   final String image;
-  final int price;
-  int qty;
+  final bool isNetworkImage;
+  final String size;
+  final double lineTotal;
+  /// Gallon addon price per unit (from API gallon.addon_price or gallon.price).
+  final double gallonAddonPrice;
   bool selected;
 
   CartItem({
+    required this.id,
+    required this.quantity,
     required this.name,
     required this.image,
-    required this.price,
-    this.qty = 1,
+    required this.isNetworkImage,
+    required this.size,
+    required this.lineTotal,
+    this.gallonAddonPrice = 0,
     this.selected = true,
   });
+
+  /// Gallon total for this line: addon_price * quantity.
+  double get gallonTotal => gallonAddonPrice * quantity;
 }
 
 class _CartPageState extends State<CartPage> {
-  /// Saved copy of items before "Delete all", so empty-cart back can restore.
-  List<CartItem>? _itemsBeforeClear;
+  List<CartItem> items = [];
+  bool _loading = true;
+  String? _error;
+  double _subtotal = 0;
 
-  List<CartItem> items = [
-    CartItem(
-      name: "Fun Cakes",
-      image: "lib/client/order/images/sb.png",
-      price: 300,
-    ),
-    CartItem(
-      name: "Vanilla",
-      image: "lib/client/order/images/sb.png",
-      price: 100,
-    ),
-    CartItem(
-      name: "Strawberry",
-      image: "lib/client/order/images/sb.png",
-      price: 400,
-    ),
-    CartItem(
-      name: "Matcha",
-      image: "lib/client/order/images/sb.png",
-      price: 800,
-      selected: false,
-    ),
-    CartItem(
-      name: "Cookies & Cream",
-      image: "lib/client/order/images/sb.png",
-      price: 200,
-      selected: false,
-    ),
-    CartItem(
-      name: "Matcha",
-      image: "lib/client/order/images/sb.png",
-      price: 800,
-      selected: false,
-    ),
-    CartItem(
-      name: "Cookies & Cream",
-      image: "lib/client/order/images/sb.png",
-      price: 200,
-      selected: false,
-    ),
-    CartItem(
-      name: "Matcha",
-      image: "lib/client/order/images/sb.png",
-      price: 800,
-      selected: false,
-    ),
-    CartItem(
-      name: "Cookies & Cream",
-      image: "lib/client/order/images/sb.png",
-      price: 200,
-      selected: false,
-    ),
-  ];
+  static String _imageUrl(String? path) {
+    if (path == null || path.isEmpty) return "";
+    final base = Auth.apiBaseUrl.replaceAll('/api/v1', '');
+    return path.startsWith('http') ? path : '$base/$path';
+  }
 
-  bool get allSelected => items.every((e) => e.selected);
+  static String _formatPrice(double value) {
+    return '₱${NumberFormat('#,##0').format(value)}';
+  }
+
+  bool get allSelected => items.isNotEmpty && items.every((e) => e.selected);
   double get total =>
-      items.where((e) => e.selected).fold(0, (sum, e) => sum + e.qty * e.price);
+      items.where((e) => e.selected).fold(0.0, (sum, e) => sum + e.lineTotal);
+  /// Display total: API subtotal when all selected, else sum of selected line_totals.
+  double get displayTotal => allSelected ? _subtotal : total;
+
+  Future<void> _fetchCart() async {
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Please log in to view cart.';
+          items = [];
+        });
+      }
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/cart'),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode != 200) {
+        setState(() {
+          _loading = false;
+          _error = body?['message'] as String? ?? 'Could not load cart.';
+          items = [];
+        });
+        return;
+      }
+      final data = body?['data'] as Map<String, dynamic>?;
+      final rawItems = data?['items'] as List<dynamic>? ?? [];
+      final subtotal = (data?['subtotal'] as num?)?.toDouble() ?? 0.0;
+      final list = <CartItem>[];
+      for (final raw in rawItems) {
+        final map = raw as Map<String, dynamic>;
+        final flavor = map['flavor'] as Map<String, dynamic>?;
+        final gallon = map['gallon'] as Map<String, dynamic>?;
+        final id = (map['id'] as num?)?.toInt();
+        final qty = (map['quantity'] as num?)?.toInt() ?? 1;
+        final lineTotal = (map['line_total'] as num?)?.toDouble() ?? 0.0;
+        if (id == null) continue;
+        final name = flavor?['name'] as String? ?? 'Flavor';
+        final imagePath = flavor?['image'] as String?;
+        final image = _imageUrl(imagePath);
+        final isNetwork = image.isNotEmpty && image.startsWith('http');
+        final size = gallon?['size'] as String? ?? '—';
+        final addonRaw = gallon?['addon_price'] ?? gallon?['price'];
+        final gallonAddon = addonRaw is num
+            ? addonRaw.toDouble()
+            : (double.tryParse(addonRaw?.toString() ?? '0') ?? 0);
+        list.add(CartItem(
+          id: id,
+          quantity: qty,
+          name: name,
+          image: image.isEmpty ? 'lib/client/order/images/sb.png' : image,
+          isNetworkImage: isNetwork,
+          size: size,
+          lineTotal: lineTotal,
+          gallonAddonPrice: gallonAddon,
+        ));
+      }
+      setState(() {
+        items = list;
+        _subtotal = subtotal;
+        _loading = false;
+        _error = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Could not load cart. Check your connection.';
+          items = [];
+        });
+      }
+    }
+  }
 
   void toggleSelectAll(bool value) {
     setState(() {
@@ -94,24 +154,88 @@ class _CartPageState extends State<CartPage> {
     });
   }
 
-  void incrementQty(int index) {
-    setState(() {
-      items[index].qty++;
-    });
-  }
+  static const int _maxQty = 5;
 
-  void decrementQty(int index) {
-    if (items[index].qty > 1) {
-      setState(() {
-        items[index].qty--;
-      });
+  Future<void> _updateQuantity(int index, int newQty) async {
+    final item = items[index];
+    if (newQty < 1 || newQty > _maxQty) return;
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) return;
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.put(
+        Uri.parse('$base/cart/${item.id}'),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'quantity': newQty}),
+      );
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        await _fetchCart();
+      } else {
+        final body = jsonDecode(res.body) as Map<String, dynamic>?;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(body?['message'] as String? ?? 'Could not update quantity.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not update quantity.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
-  void removeItem(int index) {
-    setState(() {
-      items.removeAt(index);
-    });
+  void incrementQty(int index) {
+    final item = items[index];
+    if (item.quantity >= _maxQty) return;
+    _updateQuantity(index, item.quantity + 1);
+  }
+
+  void decrementQty(int index) {
+    final item = items[index];
+    if (item.quantity <= 1) return;
+    _updateQuantity(index, item.quantity - 1);
+  }
+
+  Future<void> removeItem(int index) async {
+    final item = items[index];
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) return;
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.delete(
+        Uri.parse('$base/cart/${item.id}'),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        await _fetchCart();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not remove item.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCart();
   }
 
   void _showDeleteAllModal(BuildContext context) {
@@ -191,12 +315,18 @@ class _CartPageState extends State<CartPage> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: GestureDetector(
-                      onTap: () {
+                      onTap: () async {
                         Navigator.pop(context);
-                        setState(() {
-                          _itemsBeforeClear = List<CartItem>.from(items);
-                          items.clear();
-                        });
+                        final token = await Auth.getToken();
+                        if (token == null || token.isEmpty) return;
+                        final base = Auth.apiBaseUrl;
+                        for (final item in List<CartItem>.from(items)) {
+                          await http.delete(
+                            Uri.parse('$base/cart/${item.id}'),
+                            headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+                          );
+                        }
+                        if (mounted) await _fetchCart();
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -230,9 +360,8 @@ class _CartPageState extends State<CartPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: items.isEmpty
-          ? null
-          : AppBar(
+      appBar: (_loading || _error != null || items.isNotEmpty)
+          ? AppBar(
               elevation: 0,
               backgroundColor: Colors.white,
               centerTitle: true,
@@ -295,11 +424,34 @@ class _CartPageState extends State<CartPage> {
                   ),
                 ),
               ],
-            ),
+            ) : null,
 
-      body: items.isEmpty
-          ? _buildEmptyCartBody()
-          : Column(
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 14, color: Color(0xFF505050)),
+                        ),
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: _fetchCart,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : items.isEmpty
+                  ? _buildEmptyCartBody()
+                  : Column(
         children: [
           Expanded(
             child: ListView.builder(
@@ -374,12 +526,25 @@ class _CartPageState extends State<CartPage> {
                                   offset: const Offset(2, 2),
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(10),
-                                    child: Image.asset(
-                                      item.image,
-                                      width: 65,
-                                      height: 65,
-                                      fit: BoxFit.cover,
-                                    ),
+                                    child: item.isNetworkImage
+                                        ? Image.network(
+                                            item.image,
+                                            width: 65,
+                                            height: 65,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => Image.asset(
+                                              'lib/client/order/images/sb.png',
+                                              width: 65,
+                                              height: 65,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          )
+                                        : Image.asset(
+                                            item.image,
+                                            width: 65,
+                                            height: 65,
+                                            fit: BoxFit.cover,
+                                          ),
                                   ),
                                 ),
                           const SizedBox(width: 12),
@@ -396,9 +561,9 @@ class _CartPageState extends State<CartPage> {
                                   ),
                                 ),
                                 const SizedBox(height: 2),
-                                const Text(
-                                  "4 gal",
-                                  style: TextStyle(
+                                Text(
+                                  item.size,
+                                  style: const TextStyle(
                                     fontWeight: FontWeight.w400,
                                     fontSize: 13,
                                     color: Color(0xFF505050),
@@ -406,7 +571,7 @@ class _CartPageState extends State<CartPage> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  "₱${item.price}",
+                                  _formatPrice(item.lineTotal),
                                   style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
@@ -430,7 +595,7 @@ class _CartPageState extends State<CartPage> {
                                 horizontal: 12,
                               ),
                               child: Text(
-                                item.qty.toString(),
+                                item.quantity.toString(),
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
@@ -553,7 +718,7 @@ class _CartPageState extends State<CartPage> {
                         ),
                       ),
                       Text(
-                        "₱${total.toStringAsFixed(2)}",
+                        _formatPrice(displayTotal),
                         style: const TextStyle(
                           fontSize: 16.54,
                           fontWeight: FontWeight.bold,
@@ -564,24 +729,37 @@ class _CartPageState extends State<CartPage> {
 
                   const SizedBox(width: 23),
                   ElevatedButton(
-                    onPressed: () {},
+                    onPressed: items.where((e) => e.selected).isEmpty
+                        ? null
+                        : () {
+                            final selected = items.where((e) => e.selected).toList();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ConfirmOrderPage(
+                                  cartItems: selected,
+                                  cartSubtotal: displayTotal,
+                                ),
+                              ),
+                            );
+                          },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Color(0xFFE3001B),
+                      disabledBackgroundColor: const Color(0xFFE3001B).withOpacity(0.5),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 20, // adds small padding around text
+                        horizontal: 20,
                         vertical: 8,
                       ),
-                      minimumSize: const Size(
-                        0,
-                        45,
-                      ), // keep height, width will shrink
+                      minimumSize: const Size(0, 45),
                     ),
-                    child: const Text(
-                      "Checkout",
-                      style: TextStyle(
+                    child: Text(
+                      items.where((e) => e.selected).isEmpty
+                          ? "Checkout"
+                          : "Checkout (${items.where((e) => e.selected).length})",
+                      style: const TextStyle(
                         fontSize: 17,
                         color: Colors.white,
                         fontWeight: FontWeight.w400,
@@ -636,14 +814,7 @@ class _CartPageState extends State<CartPage> {
                     padding: const EdgeInsets.only(left: 22),
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () {
-                        setState(() {
-                          if (_itemsBeforeClear != null) {
-                            items.addAll(_itemsBeforeClear!);
-                            _itemsBeforeClear = null;
-                          }
-                        });
-                      },
+                      onTap: () => Navigator.pop(context),
                       child: Container(
                         width: 43,
                         height: 43,

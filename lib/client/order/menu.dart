@@ -28,7 +28,7 @@ class MenuPage extends StatefulWidget {
   State<MenuPage> createState() => _MenuPageState();
 }
 
-class _MenuPageState extends State<MenuPage> {
+class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
   Map<String, dynamic>? selectedItem;
   String selectedSize = "";
   String selectedCategory = "Plain Flavors"; // default selected
@@ -39,6 +39,19 @@ class _MenuPageState extends State<MenuPage> {
   List<Map<String, dynamic>>? _apiFlavors;
   List<Map<String, dynamic>>? _apiGallons;
   bool _loadingMenu = true;
+
+  /// Cart total quantity (sum of all item quantities). Fetched from API for badge.
+  int _cartCount = 0;
+  AnimationController? _addBtnController;
+  AnimationController? _cartBounceController;
+  AnimationController? _flyController;
+  Animation<double>? _addBtnScale;
+  Animation<double>? _cartBounceScale;
+
+  /// Keys to get positions for fly-to-cart animation.
+  final GlobalKey _addBtnKey = GlobalKey();
+  final GlobalKey _cartIconKey = GlobalKey();
+  OverlayEntry? _flyOverlayEntry;
 
   // Big image auto slideshow (detail view)
   final PageController _bigImageController = PageController();
@@ -69,10 +82,147 @@ class _MenuPageState extends State<MenuPage> {
     });
   }
 
+  /// Fetches cart count (sum of quantities) from API for the cart icon badge.
+  Future<void> _fetchCartCount() async {
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _cartCount = 0);
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/cart'),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      if (res.statusCode != 200) {
+        setState(() => _cartCount = 0);
+        return;
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      final data = body?['data'] as Map<String, dynamic>?;
+      final rawItems = data?['items'] as List<dynamic>? ?? [];
+      int total = 0;
+      for (final raw in rawItems) {
+        final map = raw as Map<String, dynamic>;
+        total += (map['quantity'] as num?)?.toInt() ?? 0;
+      }
+      setState(() => _cartCount = total);
+    } catch (_) {
+      if (mounted) setState(() => _cartCount = 0);
+    }
+  }
+
+  /// Plays a "fly to cart" overlay: a small product image flies from the (+) button to the cart icon.
+  void _playFlyToCartAnimation() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final addContext = _addBtnKey.currentContext;
+      final cartContext = _cartIconKey.currentContext;
+      final addBox = addContext?.findRenderObject() as RenderBox?;
+      final cartBox = cartContext?.findRenderObject() as RenderBox?;
+      if (addBox == null || cartBox == null || !addBox.hasSize || !cartBox.hasSize) {
+        return;
+      }
+      final addPos = addBox.localToGlobal(Offset.zero);
+      final addSize = addBox.size;
+      final cartPos = cartBox.localToGlobal(Offset.zero);
+      final cartSize = cartBox.size;
+      final start = Offset(addPos.dx + addSize.width / 2, addPos.dy + addSize.height / 2);
+      final end = Offset(cartPos.dx + cartSize.width / 2, cartPos.dy + cartSize.height / 2);
+
+      final flySize = 56.0;
+      final halfFly = flySize / 2;
+      final item = selectedItem;
+      final flavorImg = item?["image"] as String?;
+      final isNetwork = item?["isNetworkImage"] == true;
+      const fallback = "lib/client/order/images/sb.png";
+
+      void onFlyComplete(AnimationStatus status) {
+        if (status == AnimationStatus.completed) {
+          _flyController?.removeStatusListener(onFlyComplete);
+          _flyOverlayEntry?.remove();
+          _flyOverlayEntry = null;
+          _fetchCartCount();
+          _cartBounceController?.forward(from: 0);
+        }
+      }
+
+      _flyController?.addStatusListener(onFlyComplete);
+      _flyOverlayEntry = OverlayEntry(
+        builder: (context) => AnimatedBuilder(
+          animation: _flyController!,
+          builder: (context, child) {
+            final t = Curves.easeIn.transform(_flyController!.value);
+            final arc = 1.0 - (2 * t - 1) * (2 * t - 1);
+            final x = start.dx + (end.dx - start.dx) * t;
+            final y = start.dy + (end.dy - start.dy) * t - 50 * arc;
+            final scale = 1.3 - 0.95 * t;
+            final opacity = (1.0 - t).clamp(0.0, 1.0);
+            return Positioned(
+              left: x - halfFly,
+              top: y - halfFly,
+              width: flySize,
+              height: flySize,
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: opacity,
+                  child: Transform.scale(
+                    scale: scale,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFE3001B).withOpacity(0.4),
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: ClipOval(
+                        child: isNetwork && flavorImg != null && flavorImg.startsWith('http')
+                            ? Image.network(
+                                flavorImg,
+                                fit: BoxFit.cover,
+                                width: flySize,
+                                height: flySize,
+                                errorBuilder: (_, __, ___) => Image.asset(
+                                  fallback,
+                                  fit: BoxFit.cover,
+                                  width: flySize,
+                                  height: flySize,
+                                ),
+                              )
+                            : Image.asset(
+                                flavorImg != null && flavorImg.isNotEmpty ? flavorImg : fallback,
+                                fit: BoxFit.cover,
+                                width: flySize,
+                                height: flySize,
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      Overlay.of(context).insert(_flyOverlayEntry!);
+      _flyController?.forward(from: 0);
+    });
+  }
+
   @override
   void dispose() {
     _stopBigImageAutoSlide();
     _bigImageController.dispose();
+    _addBtnController?.dispose();
+    _cartBounceController?.dispose();
+    _flyController?.dispose();
+    _flyOverlayEntry?.remove();
     super.dispose();
   }
 
@@ -98,7 +248,7 @@ class _MenuPageState extends State<MenuPage> {
     return '₱${NumberFormat('#,##0').format(n)}';
   }
 
-  /// Items to display: from API flavors when loaded, else fallback. Each item has name, price, image, big_image, category, isNetworkImage.
+  /// Items to display: from API flavors when loaded, else fallback. Each item has name, price, image, big_image, category, isNetworkImage, id (when from API).
   List<Map<String, dynamic>> get items {
     final api = _apiFlavors;
     if (api == null || api.isEmpty) return _fallbackItems;
@@ -111,7 +261,8 @@ class _MenuPageState extends State<MenuPage> {
       final imagePath = e["image"] as String?;
       final image = _imageUrl(imagePath);
       final category = _normalizeCategory(e["category"] as String?);
-      return <String, dynamic>{
+      final id = e["id"];
+      final map = <String, dynamic>{
         "name": name,
         "price": price,
         "image": image.isEmpty ? "lib/client/order/images/sb.png" : image,
@@ -119,7 +270,87 @@ class _MenuPageState extends State<MenuPage> {
         "category": category,
         "isNetworkImage": image.isNotEmpty,
       };
+      if (id != null) map["id"] = id is int ? id : int.tryParse(id.toString());
+      return map;
     }).toList();
+  }
+
+  /// Whether the currently selected flavor is in the user's favorites (from API).
+  bool _isFavorite = false;
+
+  /// Fetches favorite state for [selectedItem] from API. Call when opening detail.
+  Future<void> _checkFavorite() async {
+    final id = selectedItem?["id"];
+    if (id == null) {
+      if (mounted) setState(() => _isFavorite = false);
+      return;
+    }
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _isFavorite = false);
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/favorites/check').replace(queryParameters: {'flavor_id': id.toString()}),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>?;
+      setState(() => _isFavorite = data?['is_favorite'] == true);
+    } catch (_) {
+      if (mounted) setState(() => _isFavorite = false);
+    }
+  }
+
+  /// Toggles favorite for [selectedItem] via POST /favorites. Updates [ _isFavorite] and shows SnackBar.
+  Future<void> _toggleFavorite() async {
+    final id = selectedItem?["id"];
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This flavor cannot be added to favorites.'), behavior: SnackBarBehavior.floating),
+      );
+      return;
+    }
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in to add favorites.'), behavior: SnackBarBehavior.floating),
+      );
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.post(
+        Uri.parse('$base/favorites'),
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+        body: jsonEncode({'flavor_id': id is int ? id : int.tryParse(id.toString()) ?? id}),
+      );
+      if (!mounted) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode == 401) {
+        setState(() => _isFavorite = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session expired. Please log in again.'), behavior: SnackBarBehavior.floating),
+        );
+        return;
+      }
+      final isFav = data?['is_favorite'] == true;
+      setState(() => _isFavorite = isFav);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isFav ? 'Added to favorites.' : 'Removed from favorites.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not update favorites.'), behavior: SnackBarBehavior.floating),
+        );
+      }
+    }
   }
 
   List<String> get gallonSizesList {
@@ -157,6 +388,90 @@ class _MenuPageState extends State<MenuPage> {
     final g = selectedGallon;
     if (g == null || g.isEmpty) return "";
     return _imageUrl(g["image"] as String?);
+  }
+
+  /// Add current selection to cart via API. POST /api/v1/cart with flavor_id, gallon_id, quantity.
+  Future<void> _addToCart() async {
+    if (quantity <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select a quantity (at least 1).'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (selectedSize.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select a gallon size.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final flavorId = selectedItem?["id"];
+    final gallon = selectedGallon;
+    final gallonId = gallon?["id"];
+    if (flavorId == null || gallonId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Flavor or gallon not found. Try refreshing the menu.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to add to cart.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    final qty = quantity.clamp(1, 5);
+    try {
+      final res = await http.post(
+        Uri.parse('$base/cart'),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'flavor_id': flavorId is int ? flavorId : int.tryParse(flavorId.toString()) ?? flavorId,
+          'gallon_id': gallonId is int ? gallonId : int.tryParse(gallonId.toString()) ?? gallonId,
+          'quantity': qty,
+        }),
+      );
+      if (!mounted) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final message = data?['message'] as String? ?? 'Added to cart.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        );
+        // Cart count and bounce are updated when fly-to-cart animation completes.
+      } else {
+        final message = data?['message'] as String? ?? 'Could not add to cart.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not add to cart. Check your connection.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _applyInitialSelection() {
@@ -205,6 +520,7 @@ class _MenuPageState extends State<MenuPage> {
         _loadingMenu = false;
       });
       _applyInitialSelection();
+      if (selectedItem != null) _checkFavorite();
     } catch (_) {
       if (mounted) setState(() => _loadingMenu = false);
     }
@@ -213,10 +529,38 @@ class _MenuPageState extends State<MenuPage> {
   @override
   void initState() {
     super.initState();
+    _addBtnController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _addBtnScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.82), weight: 50),
+      TweenSequenceItem(tween: Tween(begin: 0.82, end: 1.0), weight: 50),
+    ]).animate(CurvedAnimation(
+      parent: _addBtnController!,
+      curve: Curves.easeInOut,
+    ));
+    _cartBounceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _cartBounceScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.25), weight: 50),
+      TweenSequenceItem(tween: Tween(begin: 1.25, end: 1.0), weight: 50),
+    ]).animate(CurvedAnimation(
+      parent: _cartBounceController!,
+      curve: Curves.elasticOut,
+    ));
+    _flyController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 750),
+    );
     _loadMenuData();
+    _fetchCartCount();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _applyInitialSelection();
+      if (selectedItem != null) _checkFavorite();
     });
   }
 
@@ -458,24 +802,48 @@ class _MenuPageState extends State<MenuPage> {
                   margin: const EdgeInsets.only(right: 20),
                   height: 42,
                   width: 42,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF2F2F2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const CartPage(),
-                        ),
+                  child: AnimatedBuilder(
+                    animation: _cartBounceScale ?? const AlwaysStoppedAnimation(1.0),
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _cartBounceScale?.value ?? 1.0,
+                        child: child,
                       );
                     },
-                    icon: Icon(
-                      Icons.shopping_cart,
-                      color: const Color(0xFFE3001B),
-                      size: 20,
+                    child: Badge(
+                      key: _cartIconKey,
+                      isLabelVisible: _cartCount > 0,
+                      label: Text(
+                        _cartCount >= 99 ? '99+' : '$_cartCount',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                      backgroundColor: const Color(0xFFE3001B),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFF2F2F2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const CartPage(),
+                              ),
+                            ).then((_) => _fetchCartCount());
+                          },
+                          icon: const Icon(
+                            Icons.shopping_cart,
+                            color: Color(0xFFE3001B),
+                            size: 20,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -589,9 +957,8 @@ class _MenuPageState extends State<MenuPage> {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!mounted) return;
                       _bigImageController.jumpToPage(0);
-                      // Always run a 2-page slideshow (fallback when big_image_2 is missing),
-                      // matching the "Top Orders" behavior.
                       _startBigImageAutoSlide(count: 2);
+                      _checkFavorite();
                     });
                   },
                   child: Container(
@@ -847,21 +1214,24 @@ class _MenuPageState extends State<MenuPage> {
                                     ),
                                   ),
                                 ),
-                                // Favorite icon
+                                // Favorite icon: unfilled by default, fill when in favorites; tap toggles
                                 Positioned(
                                   top: 26,
                                   right: 14,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.90),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.favorite,
-                                      size: 22,
-                                      color: Color(0xFFE3001B),
-                                      fill: 1,
+                                  child: GestureDetector(
+                                    onTap: _toggleFavorite,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.90),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        _isFavorite ? Icons.favorite : Icons.favorite_border,
+                                        size: 22,
+                                        color: const Color(0xFFE3001B),
+                                        fill: _isFavorite ? 1 : 0,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1176,18 +1546,40 @@ class _MenuPageState extends State<MenuPage> {
                     ),
                   ),
                   const SizedBox(width: 13),
-                  Container(
-                    height: 50,
-                    width: 50,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: Color(0xFFE3001B)),
-                    ),
-                    child: const Icon(
-                      Icons.add,
-                      color: Color(0xFFE3001B),
-                      size: 28,
+                  GestureDetector(
+                    key: _addBtnKey,
+                    onTap: () {
+                      if (quantity <= 0 || selectedSize.isEmpty) return;
+                      _addBtnController?.forward(from: 0);
+                      _playFlyToCartAnimation();
+                      _addToCart();
+                    },
+                    child: AnimatedOpacity(
+                      opacity: (quantity <= 0 || selectedSize.isEmpty) ? 0.5 : 1,
+                      duration: const Duration(milliseconds: 200),
+                      child: AnimatedBuilder(
+                        animation: _addBtnScale ?? const AlwaysStoppedAnimation(1.0),
+                        builder: (context, child) {
+                          return Transform.scale(
+                            scale: _addBtnScale?.value ?? 1.0,
+                            child: child,
+                          );
+                        },
+                        child: Container(
+                          height: 50,
+                          width: 50,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                            border: Border.all(color: Color(0xFFE3001B)),
+                          ),
+                          child: const Icon(
+                            Icons.add,
+                            color: Color(0xFFE3001B),
+                            size: 28,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1342,7 +1734,7 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
-  /// One order row: gallon image on left, flavor info on right. Used in checkout overlay.
+  /// One order row: flavor image only (no gallon image), then flavor info. Used in checkout overlay / confirm order.
   Widget buildCheckoutOrderRow({
     required String gallonImageUrl,
     required String flavorImage,
@@ -1353,7 +1745,6 @@ class _MenuPageState extends State<MenuPage> {
     required int quantity,
     required String priceDisplay,
   }) {
-    const placeholderGallon = "lib/client/order/images/sb.png";
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       child: CustomPaint(
@@ -1368,31 +1759,7 @@ class _MenuPageState extends State<MenuPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Left: gallon image (from API or placeholder)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: gallonImageUrl.isNotEmpty && gallonImageUrl.startsWith('http')
-                    ? Image.network(
-                        gallonImageUrl,
-                        height: 76,
-                        width: 76,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Image.asset(
-                          placeholderGallon,
-                          height: 76,
-                          width: 76,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : Image.asset(
-                        placeholderGallon,
-                        height: 76,
-                        width: 76,
-                        fit: BoxFit.cover,
-                      ),
-              ),
-              const SizedBox(width: 15),
-              // Right: flavor image (small) + name, category, price
+              // Left: flavor image only (no gallon image in confirm order)
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
                 child: isFlavorNetwork && flavorImage.startsWith('http')
@@ -1593,8 +1960,318 @@ class DashedLine extends StatelessWidget {
   }
 }
 
+/// Confirm Order page: shows selected cart items, then "Confirm Order" navigates to Place Order.
+class ConfirmOrderPage extends StatelessWidget {
+  const ConfirmOrderPage({
+    super.key,
+    required this.cartItems,
+    required this.cartSubtotal,
+  });
+
+  final List<CartItem> cartItems;
+  final double cartSubtotal;
+
+  double get _gallonTotal =>
+      cartItems.fold(0.0, (sum, e) => sum + e.gallonTotal);
+
+  static String _formatPrice(double value) {
+    return '₱${NumberFormat('#,##0').format(value)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Header: H&R logo left, X close button right (same style as checkout overlay)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        "H&R",
+                        style: TextStyle(
+                          fontFamily: "NationalPark",
+                          fontSize: 23,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0,
+                          color: Color(0xFFE3001B),
+                          height: 1.0,
+                        ),
+                      ),
+                      const Text(
+                        "ICE CREAM",
+                        style: TextStyle(
+                          fontFamily: "NationalPark",
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFFE3001B),
+                          height: 1.0,
+                          letterSpacing: 0,
+                        ),
+                      ),
+                    ],
+                  ),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      height: 42,
+                      width: 42,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF2F2F2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, size: 22),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Scrollable center: order items only
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "My Order",
+                            style: TextStyle(
+                              fontSize: 17.68,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1C1B1F),
+                            ),
+                          ),
+                          Text(
+                            "${cartItems.length} Item${cartItems.length == 1 ? "" : "s"}",
+                            style: const TextStyle(fontSize: 14, color: Color(0xFF505050)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ...cartItems.map((item) => _ConfirmOrderRow(item: item)),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+            // Fixed bottom: Gallon, Delivery Fee, Subtotal (always visible)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                children: [
+                  DashedLine(),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("GALLON", style: TextStyle(fontSize: 13)),
+                      Text(_formatPrice(_gallonTotal)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("DELIVERY FEE", style: TextStyle(fontSize: 13)),
+                      const Text("₱0"),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "SUBTOTAL",
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        _formatPrice(cartSubtotal),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+            // Confirm Order button
+            Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CheckoutPage(
+                      cartItems: cartItems,
+                      cartSubtotal: cartSubtotal,
+                      cartGallonTotal: _gallonTotal,
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                height: 55,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE3001B),
+                  borderRadius: BorderRadius.circular(35),
+                ),
+                child: const Center(
+                  child: Text(
+                    "Confirm Order",
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConfirmOrderRow extends StatelessWidget {
+  final CartItem item;
+
+  const _ConfirmOrderRow({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      child: CustomPaint(
+        painter: DashedBorderPainter(
+          color: const Color(0xFFD9D9D9),
+          strokeWidth: 1,
+          gap: 4,
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          constraints: const BoxConstraints(minHeight: 90, maxHeight: 90),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: item.isNetworkImage && item.image.startsWith('http')
+                    ? Image.network(
+                        item.image,
+                        height: 76,
+                        width: 76,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Image.asset(
+                          "lib/client/order/images/sb.png",
+                          height: 76,
+                          width: 76,
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    : Image.asset(
+                        item.image,
+                        height: 76,
+                        width: 76,
+                        fit: BoxFit.cover,
+                      ),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      item.name,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '₱${NumberFormat('#,##0').format(item.lineTotal)}',
+                      style: const TextStyle(
+                        fontSize: 13.37,
+                        color: Color(0xFFE3001B),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const SizedBox(height: 6),
+                  Text(
+                    item.size,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF505050),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  RichText(
+                    text: TextSpan(
+                      style: const TextStyle(fontSize: 12),
+                      children: [
+                        const TextSpan(
+                          text: "Quantity: ",
+                          style: TextStyle(color: Color(0xFF898989)),
+                        ),
+                        TextSpan(
+                          text: "${item.quantity}x",
+                          style: const TextStyle(
+                            color: Color(0xFF505050),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class CheckoutPage extends StatefulWidget {
-  const CheckoutPage({super.key});
+  const CheckoutPage({
+    super.key,
+    this.cartItems,
+    this.cartSubtotal,
+    this.cartGallonTotal,
+  });
+
+  final List<CartItem>? cartItems;
+  final double? cartSubtotal;
+  final double? cartGallonTotal;
 
   @override
   State<CheckoutPage> createState() => _CheckoutPageState();
@@ -1605,6 +2282,12 @@ class _CheckoutPageState extends State<CheckoutPage> {
   TimeOfDay? selectedTime;
   String selectedPayment = "";
   int selectedDownPayment = 1700;
+
+  String get _summarySubtotal =>
+      '₱${NumberFormat('#,##0').format(widget.cartSubtotal ?? 1900)}';
+
+  String get _summaryGallon =>
+      '₱${NumberFormat('#,##0').format(widget.cartGallonTotal ?? 200)}';
 
   @override
   Widget build(BuildContext context) {
@@ -1719,149 +2402,179 @@ class _CheckoutPageState extends State<CheckoutPage> {
             ),
             _buildSection(
               title: "Product Order",
-              child: Column(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset(
-                          "lib/client/order/images/sb.png",
-                          width: 63,
-                          height: 63,
-                          fit: BoxFit.cover,
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+              child: widget.cartItems != null && widget.cartItems!.isNotEmpty
+                  ? SizedBox(
+                      height: 170,
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        child: Column(
+                          children: widget.cartItems!.asMap().entries.map((entry) {
+                            final item = entry.value;
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: entry.key < widget.cartItems!.length - 1 ? 12 : 0,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: item.isNetworkImage && item.image.startsWith('http')
+                                        ? Image.network(
+                                            item.image,
+                                            width: 55,
+                                            height: 55,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => Image.asset(
+                                              "lib/client/order/images/sb.png",
+                                              width: 55,
+                                              height: 55,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          )
+                                        : Image.asset(
+                                            item.image,
+                                            width: 55,
+                                            height: 55,
+                                            fit: BoxFit.cover,
+                                          ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          item.name,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF1C1B1F),
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          item.size,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFF9D9D9D),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '₱${NumberFormat('#,##0').format(item.lineTotal)}',
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Color(0xFFE3001B),
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        "x${item.quantity}",
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF505050),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        item.size,
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Color(0xFF505050),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
                         ),
                       ),
-                      const SizedBox(width: 15),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                    )
+                  :
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset(
+                            "lib/client/order/images/sb.png",
+                            width: 63,
+                            height: 63,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 15),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Text(
+                                "Strawberry",
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1C1B1F),
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                "Special Flavor",
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF9D9D9D),
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                "₱1,700",
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFFE3001B),
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Column(
                           mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: const [
                             Text(
-                              "Strawberry",
+                              "x1",
                               style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1C1B1F),
+                                fontSize: 13,
+                                color: Color(0xFF505050),
                               ),
                             ),
                             SizedBox(height: 2),
                             Text(
-                              "Special Flavor",
+                              "3.5 gal",
                               style: TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF9D9D9D),
-                              ),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              "₱1,700",
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFFE3001B),
-                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                color: Color(0xFF505050),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: const [
-                          Text(
-                            "x1",
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF505050),
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            "3.5 gal",
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF505050),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-
-                  /*      const SizedBox(height: 10), // spacing between products
-
-        // SECOND PRODUCT (Mango Graham again)
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                "lib/client/order/images/sb.png",
-                width: 67,
-                height: 67,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(width: 15),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  "Mango Graham",
-                  style: TextStyle(
-                    fontSize: 13.59,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  "Special Flavor",
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF9D9D9D),
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  "\$ 100",
-                  style: TextStyle(
-                    fontSize: 13.37,
-                    color: Color(0xFFE3001B),
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: const [
-                Text(
-                  "x1",
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF505050),
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  "2 gal",
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF505050),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ), */
-                ],
-              ),
+                      ],
+                    ),
             ),
 
             _buildSection(
@@ -1964,15 +2677,15 @@ class _CheckoutPageState extends State<CheckoutPage> {
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
               child: Column(
                 children: [
-                  _summaryRow("GALLON", "₱200"),
+                  _summaryRow("GALLON", _summaryGallon),
                   const SizedBox(height: 6),
                   _summaryRow("DELIVERY FEE", "0"),
                   const SizedBox(height: 6),
-                  _summaryRow("SUBTOTAL", "₱1,900"),
+                  _summaryRow("SUBTOTAL", _summarySubtotal),
                   const SizedBox(height: 8),
                   Divider(color: Colors.grey.shade300, height: 1),
                   const SizedBox(height: 8),
-                  _summaryRow("TOTAL PAYMENT", "₱1,900", isBold: true),
+                  _summaryRow("TOTAL PAYMENT", _summarySubtotal, isBold: true),
                 ],
               ),
             ),
