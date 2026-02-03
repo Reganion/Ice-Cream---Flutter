@@ -258,7 +258,7 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
       final price = priceRaw is num
           ? priceRaw.toDouble()
           : (double.tryParse(priceRaw?.toString() ?? "0") ?? 0.0);
-      final imagePath = e["image"] as String?;
+      final imagePath = (e["mobile_image"] ?? e["image"]) as String?;
       final image = _imageUrl(imagePath);
       final category = _normalizeCategory(e["category"] as String?);
       final id = e["id"];
@@ -941,7 +941,7 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
               itemCount: filteredItems.length,
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                mainAxisExtent: 177,
+                mainAxisExtent: 187,
                 crossAxisSpacing: 10,
                 mainAxisSpacing: 10,
               ),
@@ -983,24 +983,21 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
                             width: double.infinity,
                             color: Colors.transparent,
                             child: Padding(
-                              padding: const EdgeInsets.all(10),
+                              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(12),
                                 child: item["isNetworkImage"] == true
                                     ? Image.network(
                                         item["image"] as String,
                                         fit: BoxFit.cover,
-                                        alignment: Alignment.topCenter,
                                         errorBuilder: (_, __, ___) => Image.asset(
                                           "lib/client/order/images/sb.png",
                                           fit: BoxFit.cover,
-                                          alignment: Alignment.topCenter,
                                         ),
                                       )
                                     : Image.asset(
                                         item["image"] as String,
                                         fit: BoxFit.cover,
-                                        alignment: Alignment.topCenter,
                                       ),
                               ),
                             ),
@@ -1707,10 +1704,30 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               child: GestureDetector(
                 onTap: () {
-                  // Navigate to the CheckoutPage when tapped
+                  // Build cart item from current selection for CheckoutPage
+                  final lineTotal = flavorSubtotal + gallonAddonTotal;
+                  final img = (flavorImage != null && flavorImage.isNotEmpty)
+                      ? flavorImage
+                      : "lib/client/order/images/sb.png";
+                  final cartItem = CartItem(
+                    id: (item?["id"] as int?) ?? 0,
+                    quantity: qty,
+                    name: item?["name"] as String? ?? "Flavor",
+                    image: img,
+                    isNetworkImage: isFlavorNetwork,
+                    size: selectedSize.isEmpty ? "—" : selectedSize,
+                    lineTotal: lineTotal,
+                    gallonAddonPrice: selectedGallonAddonPrice,
+                  );
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const CheckoutPage()),
+                    MaterialPageRoute(
+                      builder: (_) => CheckoutPage(
+                        cartItems: [cartItem],
+                        cartSubtotal: totalSubtotal,
+                        cartGallonTotal: gallonAddonTotal,
+                      ),
+                    ),
                   );
                 },
                 child: Container(
@@ -2281,13 +2298,32 @@ class _CheckoutPageState extends State<CheckoutPage> {
   DateTime? selectedDate;
   TimeOfDay? selectedTime;
   String selectedPayment = "";
-  int selectedDownPayment = 1700;
+  /// null = "No selected", 0.25/0.5/0.75/1.0 = percentage of total
+  double? selectedDownPaymentPercent;
+
+  double get _totalPayment => widget.cartSubtotal ?? 0;
 
   String get _summarySubtotal =>
-      '₱${NumberFormat('#,##0').format(widget.cartSubtotal ?? 1900)}';
+      '₱${NumberFormat('#,##0').format(widget.cartSubtotal ?? 0)}';
 
   String get _summaryGallon =>
-      '₱${NumberFormat('#,##0').format(widget.cartGallonTotal ?? 200)}';
+      '₱${NumberFormat('#,##0').format(widget.cartGallonTotal ?? 0)}';
+
+  String? get _deliveryScheduleError {
+    if (selectedDate == null) return "Delivery schedule is required*";
+    if (selectedTime == null) return "Delivery schedule is required*";
+    return null;
+  }
+
+  String? get _downPaymentError {
+    if (selectedDownPaymentPercent == null) return "Down payment is required*";
+    return null;
+  }
+
+  bool get _canPlaceOrder =>
+      selectedDate != null &&
+      selectedTime != null &&
+      selectedDownPaymentPercent != null;
 
   @override
   Widget build(BuildContext context) {
@@ -2318,29 +2354,43 @@ class _CheckoutPageState extends State<CheckoutPage> {
       ),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.only(
-          left: 20, // horizontal padding
-          right: 20, // horizontal padding
-          bottom: 10, // vertical padding only at bottom
-        ), // horizontal margin
-
+          left: 20,
+          right: 20,
+          bottom: 10,
+        ),
         child: GestureDetector(
           onTap: () {
-            // Add the same action as Confirm Order
+            if (!_canPlaceOrder) {
+              setState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Please complete delivery schedule and select down payment.',
+                  ),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              return;
+            }
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const DeliveryTrackerPage()),
             );
           },
-          child: Container(
-            height: 55,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE3001B),
-              borderRadius: BorderRadius.circular(35),
-            ),
-            child: const Center(
-              child: Text(
-                "Place Order",
-                style: TextStyle(color: Colors.white, fontSize: 16),
+          child: AnimatedOpacity(
+            opacity: _canPlaceOrder ? 1 : 0.5,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              height: 55,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE3001B),
+                borderRadius: BorderRadius.circular(35),
+              ),
+              child: const Center(
+                child: Text(
+                  "Place Order",
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
               ),
             ),
           ),
@@ -2350,7 +2400,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            const SizedBox(height: 30),
+            const SizedBox(height: 12),
             _buildSection(
               title: "Address details",
               trailing: "Edit",
@@ -2405,7 +2455,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
               child: widget.cartItems != null && widget.cartItems!.isNotEmpty
                   ? SizedBox(
-                      height: 170,
+                      height: 90,
                       child: SingleChildScrollView(
                         physics: const BouncingScrollPhysics(),
                         padding: EdgeInsets.zero,
@@ -2579,6 +2629,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
 
             _buildSection(
               title: "Delivery schedule",
+              validationError: _deliveryScheduleError,
               child: Row(
                 children: [
                   Expanded(child: _datePicker()),
@@ -2590,12 +2641,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
 
             _buildSection(
               title: "Down payment Amount",
+              validationError: _downPaymentError,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // --- Dotted Line directly under title ---
-                  const SizedBox(height: 0), // ← moved up (from 12 → 4)
-
+                  const SizedBox(height: 0),
                   LayoutBuilder(
                     builder: (context, constraints) {
                       double dotWidth = 4.1;
@@ -2619,13 +2669,13 @@ class _CheckoutPageState extends State<CheckoutPage> {
                   const SizedBox(height: 14),
                   Row(
                     children: [
-                      Expanded(child: _priceBox(500)),
+                      Expanded(child: _percentBox(0.25)),
                       const SizedBox(width: 8),
-                      Expanded(child: _priceBox(1000)),
+                      Expanded(child: _percentBox(0.5)),
                       const SizedBox(width: 8),
-                      Expanded(child: _priceBox(1700)),
+                      Expanded(child: _percentBox(0.75)),
                       const SizedBox(width: 8),
-                      Expanded(child: _priceBox(1900)),
+                      Expanded(child: _percentBox(1.0)),
                     ],
                   ),
                 ],
@@ -2679,7 +2729,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 children: [
                   _summaryRow("GALLON", _summaryGallon),
                   const SizedBox(height: 6),
-                  _summaryRow("DELIVERY FEE", "0"),
+                  _summaryRow("DELIVERY FEE", "₱0"),
                   const SizedBox(height: 6),
                   _summaryRow("SUBTOTAL", _summarySubtotal),
                   const SizedBox(height: 8),
@@ -2704,6 +2754,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
     String? title,
     String? trailing,
     EdgeInsets? padding,
+    String? validationError,
     required Widget child,
   }) {
     bool isAddress = title == "Address details";
@@ -2723,15 +2774,19 @@ class _CheckoutPageState extends State<CheckoutPage> {
     }
 
     return Container(
-      // Horizontal margin set to 20 for all sections
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+      // Address container at top: less top margin so it sits up; others keep 20 horizontal
+      margin: isAddress
+          ? const EdgeInsets.fromLTRB(20, 0, 20, 2)
+          : const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
       padding: padding ?? EdgeInsets.all(isAddress ? 10 : 15),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: isAddress
-            ? const Border(top: BorderSide(color: Color(0xFFE3001B), width: 8))
-            : null,
+        border: validationError != null
+            ? Border.all(color: const Color(0xFFE3001B), width: 1.5)
+            : (isAddress
+                ? const Border(top: BorderSide(color: Color(0xFFE3001B), width: 8))
+                : null),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(.05),
@@ -2793,6 +2848,15 @@ class _CheckoutPageState extends State<CheckoutPage> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
+                      ),
+                    )
+                  else if (validationError != null)
+                    Text(
+                      validationError,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFE3001B),
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                 ],
@@ -3029,14 +3093,17 @@ class _CheckoutPageState extends State<CheckoutPage> {
     );
   }
 
-  Widget _priceBox(int amount) {
-    final isSelected = selectedDownPayment == amount;
+  Widget _percentBox(double percent) {
+    final amount = (_totalPayment * percent).round();
+    final label = percent == 1.0 ? "100%" : "${(percent * 100).toInt()}%";
+    final isSelected = selectedDownPaymentPercent == percent;
     return GestureDetector(
-      onTap: () => setState(() => selectedDownPayment = amount),
+      onTap: () => setState(() => selectedDownPaymentPercent = percent),
       child: Container(
         width: 65,
-        height: 30,
+        height: 36,
         alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFE3001B) : Colors.white,
           borderRadius: BorderRadius.circular(8),
@@ -3045,12 +3112,27 @@ class _CheckoutPageState extends State<CheckoutPage> {
             width: 0.5,
           ),
         ),
-        child: Text(
-          "₱${NumberFormat('#,###').format(amount)}",
-          style: TextStyle(
-            color: isSelected ? const Color(0xFFFFFFFF) : const Color(0xFF1C1B1F),
-            fontWeight: FontWeight.w500,
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: isSelected ? const Color(0xFFFFFFFF) : const Color(0xFF1C1B1F),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              "₱${NumberFormat('#,##0').format(amount)}",
+              style: TextStyle(
+                fontSize: 10,
+                color: isSelected ? const Color(0xFFFFFFFF) : const Color(0xFF505050),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );

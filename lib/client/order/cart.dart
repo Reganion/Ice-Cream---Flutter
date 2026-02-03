@@ -36,7 +36,7 @@ class CartItem {
     required this.size,
     required this.lineTotal,
     this.gallonAddonPrice = 0,
-    this.selected = true,
+    this.selected = false,
   });
 
   /// Gallon total for this line: addon_price * quantity.
@@ -60,6 +60,7 @@ class _CartPageState extends State<CartPage> {
   }
 
   bool get allSelected => items.isNotEmpty && items.every((e) => e.selected);
+  bool get anySelected => items.any((e) => e.selected);
   double get total =>
       items.where((e) => e.selected).fold(0.0, (sum, e) => sum + e.lineTotal);
   /// Display total: API subtotal when all selected, else sum of selected line_totals.
@@ -110,7 +111,7 @@ class _CartPageState extends State<CartPage> {
         final lineTotal = (map['line_total'] as num?)?.toDouble() ?? 0.0;
         if (id == null) continue;
         final name = flavor?['name'] as String? ?? 'Flavor';
-        final imagePath = flavor?['image'] as String?;
+        final imagePath = (flavor?['mobile_image'] ?? flavor?['image']) as String?;
         final image = _imageUrl(imagePath);
         final isNetwork = image.isNotEmpty && image.startsWith('http');
         final size = gallon?['size'] as String? ?? '—';
@@ -127,6 +128,7 @@ class _CartPageState extends State<CartPage> {
           size: size,
           lineTotal: lineTotal,
           gallonAddonPrice: gallonAddon,
+          selected: false,
         ));
       }
       setState(() {
@@ -238,7 +240,40 @@ class _CartPageState extends State<CartPage> {
     _fetchCart();
   }
 
-  void _showDeleteAllModal(BuildContext context) {
+  Future<void> _deleteSelectedItems() async {
+    final selectedItems = items.where((e) => e.selected).toList();
+    if (selectedItems.isEmpty) return;
+
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) return;
+
+    final base = Auth.apiBaseUrl;
+
+    try {
+      await Future.wait(
+        selectedItems.map(
+          (item) => http.delete(
+            Uri.parse('$base/cart/${item.id}'),
+            headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+          ),
+        ),
+      );
+      if (mounted) await _fetchCart();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not delete selected items.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _showDeleteSelectedModal(BuildContext context) {
+    final selectedCount = items.where((e) => e.selected).length;
+    if (selectedCount == 0) return;
+
     showDialog(
       context: context,
       barrierColor: Colors.black54,
@@ -267,7 +302,7 @@ class _CartPageState extends State<CartPage> {
               ),
               const SizedBox(height: 10),
               const Text(
-                "Delete all",
+                "Delete selected",
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
@@ -275,10 +310,10 @@ class _CartPageState extends State<CartPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                "Are you sure you want to delete all the cart?",
+              Text(
+                "Are you sure you want to delete $selectedCount selected item${selectedCount == 1 ? '' : 's'}?",
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 12.50,
                   color: Color(0xFF747474),
                   fontWeight: FontWeight.w400,
@@ -317,16 +352,7 @@ class _CartPageState extends State<CartPage> {
                     child: GestureDetector(
                       onTap: () async {
                         Navigator.pop(context);
-                        final token = await Auth.getToken();
-                        if (token == null || token.isEmpty) return;
-                        final base = Auth.apiBaseUrl;
-                        for (final item in List<CartItem>.from(items)) {
-                          await http.delete(
-                            Uri.parse('$base/cart/${item.id}'),
-                            headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
-                          );
-                        }
-                        if (mounted) await _fetchCart();
+                        await _deleteSelectedItems();
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -408,11 +434,11 @@ class _CartPageState extends State<CartPage> {
                   padding: const EdgeInsets.only(right: 18),
                   child: Center(
                     child: GestureDetector(
-                      onTap: allSelected ? () => _showDeleteAllModal(context) : null,
+                      onTap: anySelected ? () => _showDeleteSelectedModal(context) : null,
                       child: Icon(
                         Symbols.delete,
                         size: 22,
-                        color: allSelected
+                        color: anySelected
                             ? const Color(0xFF171717)
                             : const Color(0xFFA8A8A8),
                         fill: 0,
@@ -504,7 +530,14 @@ class _CartPageState extends State<CartPage> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Container(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          setState(() {
+                            item.selected = !item.selected;
+                          });
+                        },
+                        child: Container(
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
@@ -627,6 +660,7 @@ class _CartPageState extends State<CartPage> {
                     ],
                   ),
                 ),
+                    ),
                     ),
                   ],
                 );

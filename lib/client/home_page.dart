@@ -42,6 +42,9 @@ class _HomePageState extends State<HomePage> {
   int _topImagesCurrentPage = 0;
   int _manualSlideCurrentPage = 0;
 
+  /// Cart total quantity (sum of all item quantities) for badge on cart icon.
+  int _cartCount = 0;
+
   int index = 0;
   bool forward = true;
   bool isMobile(BuildContext context) =>
@@ -79,7 +82,7 @@ class _HomePageState extends State<HomePage> {
         .map((e) => {
               "title": e["name"] as String? ?? "",
               "img": "",
-              "imageUrl": _imageUrl(e["image"] as String?),
+              "imageUrl": _imageUrl((e["mobile_image"] ?? e["image"]) as String?),
               "priceDisplay": _formatPrice(e["price"]),
             })
         .toList();
@@ -199,6 +202,38 @@ class _HomePageState extends State<HomePage> {
     return '₱${price.toString()}';
   }
 
+  /// Fetches cart count (sum of quantities) from API for the cart icon badge.
+  Future<void> _fetchCartCount() async {
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _cartCount = 0);
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/cart'),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      if (res.statusCode != 200) {
+        setState(() => _cartCount = 0);
+        return;
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      final data = body?['data'] as Map<String, dynamic>?;
+      final rawItems = data?['items'] as List<dynamic>? ?? [];
+      int total = 0;
+      for (final raw in rawItems) {
+        final map = raw as Map<String, dynamic>;
+        total += (map['quantity'] as num?)?.toInt() ?? 0;
+      }
+      setState(() => _cartCount = total);
+    } catch (_) {
+      if (mounted) setState(() => _cartCount = 0);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -207,6 +242,7 @@ class _HomePageState extends State<HomePage> {
     _manualSlideController.addListener(_onManualSlidePageChanged);
     _loadCachedUser();
     _loadHomeData();
+    _fetchCartCount();
 
     // Advance topImages to next every 5 seconds
     _autoSlideTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -369,7 +405,7 @@ class _HomePageState extends State<HomePage> {
                     child: _profileAvatarWidget(),
                   ),
 
-                  // Shopping cart with onPressed (onTap)
+                  // Shopping cart with badge (cart count)
                   GestureDetector(
                     onTap: () {
                       Navigator.push(
@@ -377,19 +413,31 @@ class _HomePageState extends State<HomePage> {
                         MaterialPageRoute(
                           builder: (context) => const CartPage(),
                         ),
-                      );
+                      ).then((_) => _fetchCartCount());
                     },
-                    child: Container(
-                      height: 43,
-                      width: 43,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFF2F2F2),
-                        shape: BoxShape.circle,
+                    child: Badge(
+                      isLabelVisible: _cartCount > 0,
+                      label: Text(
+                        _cartCount >= 99 ? '99+' : '$_cartCount',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.shopping_cart,
-                        color: Color(0xFFE3001B),
-                        size: 22,
+                      backgroundColor: const Color(0xFFE3001B),
+                      child: Container(
+                        height: 43,
+                        width: 43,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFF2F2F2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.shopping_cart,
+                          color: Color(0xFFE3001B),
+                          size: 22,
+                        ),
                       ),
                     ),
                   ),
@@ -553,7 +601,7 @@ class _HomePageState extends State<HomePage> {
                                             itemCount: count,
                                             itemBuilder: (context, i) {
                                               if (useBestSellers) {
-                                                final imgUrl = _imageUrl(_bestSellers![i]["image"] as String?);
+                                                final imgUrl = _imageUrl((_bestSellers![i]["mobile_image"] ?? _bestSellers![i]["image"]) as String?);
                                                 return Padding(
                                                   padding: const EdgeInsets.symmetric(horizontal: 5),
                                                   child: ClipRRect(
@@ -749,7 +797,7 @@ class _HomePageState extends State<HomePage> {
                                       itemBuilder: (context, i) {
                                         final usePopular = _popular?.isNotEmpty == true;
                                         if (usePopular) {
-                                          final imgUrl = _imageUrl(_popular![i]["image"] as String?);
+                                          final imgUrl = _imageUrl((_popular![i]["mobile_image"] ?? _popular![i]["image"]) as String?);
                                           return Padding(
                                             padding: const EdgeInsets.symmetric(horizontal: 5),
                                             child: ClipRRect(

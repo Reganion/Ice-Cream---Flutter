@@ -22,6 +22,7 @@ class _FavoritePageState extends State<FavoritePage> {
   List<Map<String, dynamic>>? _favorites;
   bool _loading = true;
   String? _error;
+  int _cartCount = 0;
 
   static const _cardColors = [
     Color(0xFFFFE0E6),
@@ -43,6 +44,37 @@ class _FavoritePageState extends State<FavoritePage> {
     final num? n = price is num ? price : double.tryParse(price.toString());
     if (n == null) return '₱0';
     return '₱${NumberFormat('#,##0').format(n)}';
+  }
+
+  Future<void> _fetchCartCount() async {
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _cartCount = 0);
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/cart'),
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      if (res.statusCode != 200) {
+        setState(() => _cartCount = 0);
+        return;
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      final data = body?['data'] as Map<String, dynamic>?;
+      final rawItems = data?['items'] as List<dynamic>? ?? [];
+      int total = 0;
+      for (final raw in rawItems) {
+        final map = raw as Map<String, dynamic>;
+        total += (map['quantity'] as num?)?.toInt() ?? 0;
+      }
+      setState(() => _cartCount = total);
+    } catch (_) {
+      if (mounted) setState(() => _cartCount = 0);
+    }
   }
 
   Future<void> _loadFavorites() async {
@@ -101,7 +133,7 @@ class _FavoritePageState extends State<FavoritePage> {
           final price = priceRaw is num
               ? priceRaw.toDouble()
               : (double.tryParse(priceRaw?.toString() ?? '0') ?? 0.0);
-          final imagePath = flavor['image'] as String?;
+          final imagePath = (flavor['mobile_image'] ?? flavor['image']) as String?;
           final image = _imageUrl(imagePath);
           list.add({
             'id': flavor['id'],
@@ -134,6 +166,7 @@ class _FavoritePageState extends State<FavoritePage> {
   void initState() {
     super.initState();
     _loadFavorites();
+    _fetchCartCount();
   }
 
   @override
@@ -177,25 +210,37 @@ class _FavoritePageState extends State<FavoritePage> {
         actions: [
           Container(
             margin: const EdgeInsets.only(right: 15),
-            height: 46.82, // ↓ smaller circle height
-            width: 46.82, // ↓ smaller circle width
-            decoration: BoxDecoration(
+            height: 46.82,
+            width: 46.82,
+            decoration: const BoxDecoration(
               color: Color(0xFFF2F2F2),
               shape: BoxShape.circle,
             ),
-            child: IconButton(
-              padding: EdgeInsets.zero,
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const CartPage()),
-                );
-              },
-              icon: const Icon(
-                Icons.shopping_cart,
-                size: 22,
-                color: Color(0xFFE3001B),
-                fill: 1.0,
+            child: Badge(
+              isLabelVisible: _cartCount > 0,
+              label: Text(
+                _cartCount >= 99 ? '99+' : '$_cartCount',
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+              backgroundColor: const Color(0xFFE3001B),
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CartPage()),
+                  ).then((_) => _fetchCartCount());
+                },
+                icon: const Icon(
+                  Icons.shopping_cart,
+                  size: 22,
+                  color: Color(0xFFE3001B),
+                  fill: 1.0,
+                ),
               ),
             ),
           ),

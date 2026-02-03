@@ -315,19 +315,32 @@ class _SignUpPageState extends State<SignUpPage> {
                         height: 55,
                         child: OutlinedButton(
                           onPressed: () async {
-                            var user = await Auth().signInWithGoogle();
-
-                            if (user != null) {
-                              Navigator.pushReplacement(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const HomePage(),
-                                ),
-                              );
-                            } else {
+                            try {
+                              final user = await Auth().signInWithGoogle();
+                              if (!mounted) return;
+                              if (user != null && user.isNotEmpty) {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const HomePage(),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("Sign-up cancelled"),
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Google Sign-Up failed"),
+                                SnackBar(
+                                  content: Text(
+                                    e is Exception
+                                        ? e.toString().replaceFirst('Exception: ', '')
+                                        : 'Google Sign-Up failed',
+                                  ),
                                 ),
                               );
                             }

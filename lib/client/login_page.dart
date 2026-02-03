@@ -4,6 +4,8 @@ import 'package:ice_cream/client/forgot_password.dart';
 import 'create_page.dart'; // or the correct file path
 import 'home_page.dart'; // or the correct file path
 
+enum SuffixIconType { clear, visibility }
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -18,7 +20,6 @@ class _LoginPageState extends State<LoginPage> {
 
   bool _showEmailClear = false;
   bool _showPasswordEye = false;
-  bool _obscureEmail = false; // email is not hidden by default
 
   bool _emailError = false;
   bool _passwordError = false;
@@ -131,11 +132,12 @@ class _LoginPageState extends State<LoginPage> {
                             setState(() => _emailBorderColor = color),
                         focusNode: _focusNodeEmail,
                         showSuffixIcon: _showEmailClear,
-                        obscureText: _obscureEmail,
+                        suffixIconType: SuffixIconType.clear,
+                        obscureText: false,
                         onSuffixIconTap: () {
                           setState(() {
-                            _obscureEmail =
-                                !_obscureEmail; // toggle visibility like password
+                            _emailController.clear();
+                            _showEmailClear = false;
                           });
                         },
                       ),
@@ -154,6 +156,7 @@ class _LoginPageState extends State<LoginPage> {
                             setState(() => _passwordBorderColor = color),
                         focusNode: _focusNodePassword,
                         showSuffixIcon: _showPasswordEye,
+                        suffixIconType: SuffixIconType.visibility,
                         obscureText: _obscurePassword,
                         onSuffixIconTap: () {
                           setState(() {
@@ -281,19 +284,32 @@ class _LoginPageState extends State<LoginPage> {
                         height: 55,
                         child: OutlinedButton(
                           onPressed: () async {
-                            var user = await Auth().signInWithGoogle();
-
-                            if (user != null) {
-                              Navigator.pushReplacement(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const HomePage(),
-                                ),
-                              );
-                            } else {
+                            try {
+                              final user = await Auth().signInWithGoogle();
+                              if (!context.mounted) return;
+                              if (user != null && user.isNotEmpty) {
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const HomePage(),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("Sign-in cancelled"),
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Google Sign-In failed"),
+                                SnackBar(
+                                  content: Text(
+                                    e is Exception
+                                        ? e.toString().replaceFirst('Exception: ', '')
+                                        : 'Google Sign-In failed',
+                                  ),
                                 ),
                               );
                             }
@@ -373,6 +389,7 @@ class _LoginPageState extends State<LoginPage> {
     required FocusNode focusNode,
     bool obscureText = false,
     bool showSuffixIcon = false,
+    SuffixIconType suffixIconType = SuffixIconType.visibility,
     VoidCallback? onSuffixIconTap,
   }) {
     focusNode.addListener(() {
@@ -446,9 +463,11 @@ class _LoginPageState extends State<LoginPage> {
                   ? IconButton(
                       padding: EdgeInsets.zero,
                       icon: Icon(
-                        obscureText
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
+                        suffixIconType == SuffixIconType.clear
+                            ? Icons.close
+                            : (obscureText
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined),
                         size: 22,
                       ),
                       onPressed: onSuffixIconTap,
