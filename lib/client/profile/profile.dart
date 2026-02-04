@@ -8,6 +8,7 @@ import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/landing_page.dart';
 import 'package:ice_cream/client/login_page.dart';
 import 'package:ice_cream/client/order/gcash.dart';
+import 'package:ice_cream/client/order/manage_address.dart';
 import 'package:image_picker/image_picker.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -222,6 +223,26 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   _settingsTile(
                     iconWidget: const Icon(
+                      Symbols.location_on,
+                      size: 23,
+                      color: Colors.black87,
+                      fill: 0,
+                      weight: 300,
+                      grade: 0,
+                      opticalSize: 24,
+                    ),
+                    text: "Address Details",
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const AddressDetailsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _settingsTile(
+                    iconWidget: const Icon(
                       Symbols.key,
                       size: 23,
                       color: Colors.black87,
@@ -404,6 +425,26 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         _settingsTile(
                           iconWidget: const Icon(
+                            Symbols.location_on,
+                            size: 23,
+                            color: Colors.black87,
+                            fill: 0,
+                            weight: 300,
+                            grade: 0,
+                            opticalSize: 24,
+                          ),
+                          text: "Address Details",
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const AddressDetailsPage(),
+                              ),
+                            );
+                          },
+                        ),
+                        _settingsTile(
+                          iconWidget: const Icon(
                             Symbols.key,
                             size: 23,
                             color: Colors.black87,
@@ -548,6 +589,370 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Address Selection page: loads real address from API (GET /account), Edit/Add call PUT /address.
+/// When [forCheckout] is true, back button pops with the currently selected address (for use on Place Order).
+class AddressDetailsPage extends StatefulWidget {
+  const AddressDetailsPage({super.key, this.forCheckout = false});
+
+  final bool forCheckout;
+
+  /// Build address map from API account (for display on checkout or elsewhere).
+  static Map<String, dynamic> addressMapFromAccount(Map<String, dynamic> account) {
+    final first = account['firstname'] as String? ?? '';
+    final last = account['lastname'] as String? ?? '';
+    final contact = (account['contact_no'] ?? '').toString().trim();
+    final street = (account['street_name'] ?? '').toString().trim();
+    final province = (account['province'] ?? '').toString().trim();
+    final city = (account['city'] ?? '').toString().trim();
+    final barangay = (account['barangay'] ?? '').toString().trim();
+    final postalCode = (account['postal_code'] ?? '').toString().trim();
+    final label = (account['label_as'] ?? 'Home').toString().trim();
+    final fullAddress = (account['full_address'] ?? '').toString();
+    return {
+      'firstName': first,
+      'lastName': last,
+      'contact': contact,
+      'street': street,
+      'province': province.isEmpty ? 'Cebu' : province,
+      'city': city.isEmpty ? 'Mandaue' : city,
+      'barangay': barangay,
+      'postalCode': postalCode.isEmpty ? (city.toLowerCase().contains('lapu') ? '6015' : '6014') : postalCode,
+      'label': label.isEmpty ? 'Home' : label,
+      'fullAddress': fullAddress.isNotEmpty ? fullAddress : '$street, $barangay, $city${city.isNotEmpty ? ' City' : ''}, $province, $postalCode'.replaceAll(RegExp(r',\s*,'), ',').trim(),
+    };
+  }
+
+  @override
+  State<AddressDetailsPage> createState() => _AddressDetailsPageState();
+}
+
+class _AddressDetailsPageState extends State<AddressDetailsPage> {
+  int _selectedIndex = 0;
+  List<Map<String, dynamic>> _addresses = [];
+  bool _loading = true;
+  String? _error;
+
+  /// Map API address (from GET /addresses) to display format.
+  static Map<String, dynamic> _apiAddressToDisplay(Map<String, dynamic> a) {
+    final first = (a['firstname'] ?? '').toString().trim();
+    final last = (a['lastname'] ?? '').toString().trim();
+    final contact = (a['contact_no'] ?? '').toString().trim();
+    final street = (a['street_name'] ?? '').toString().trim();
+    final province = (a['province'] ?? 'Cebu').toString().trim();
+    final city = (a['city'] ?? '').toString().trim();
+    final barangay = (a['barangay'] ?? '').toString().trim();
+    final postalCode = (a['postal_code'] ?? '').toString().trim();
+    final label = (a['label_as'] ?? 'Home').toString().trim();
+    final fullAddress = (a['full_address'] ?? '').toString().trim();
+    final id = a['id'];
+    final isDefault = a['is_default'] == true;
+    return {
+      'id': id,
+      'firstName': first,
+      'lastName': last,
+      'contact': contact,
+      'street': street,
+      'province': province.isEmpty ? 'Cebu' : province,
+      'city': city,
+      'barangay': barangay,
+      'postalCode': postalCode.isEmpty ? (city.toLowerCase().contains('lapu') ? '6015' : '6014') : postalCode,
+      'label': label.isEmpty ? 'Home' : label,
+      'fullAddress': fullAddress.isNotEmpty ? fullAddress : '$street, $barangay, $city${city.isNotEmpty ? ' City' : ''}, ${province.isEmpty ? 'Cebu' : province}, $postalCode'.replaceAll(RegExp(r',\s*,'), ', ').trim(),
+      'is_default': isDefault,
+    };
+  }
+
+  Future<void> _loadAddresses() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final list = await Auth().getAddresses();
+      if (!mounted) return;
+      final display = list.map(_apiAddressToDisplay).toList();
+      int selected = 0;
+      for (int i = 0; i < display.length; i++) {
+        if (display[i]['is_default'] == true) {
+          selected = i;
+          break;
+        }
+      }
+      setState(() {
+        _addresses = display;
+        _selectedIndex = display.isEmpty ? 0 : selected.clamp(0, display.length - 1);
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _addresses = [];
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _saveAddressFromForm(Map<String, dynamic> result) async {
+    try {
+      final firstname = (result['firstName'] ?? '').toString().trim();
+      final lastname = (result['lastName'] ?? '').toString().trim();
+      final contactNo = (result['contact'] ?? '').toString().trim();
+      final province = (result['province'] ?? '').toString().trim();
+      final city = (result['city'] ?? '').toString().trim();
+      final barangay = (result['barangay'] ?? '').toString().trim();
+      final postalCode = (result['postalCode'] ?? '').toString().trim();
+      final streetName = (result['street'] ?? '').toString().trim();
+      final labelAs = (result['label'] ?? '').toString().trim();
+      final id = result['id'];
+      if (id != null) {
+        final idInt = id is int ? id : int.tryParse(id.toString());
+        if (idInt != null) {
+          await Auth().updateAddressById(idInt, firstname: firstname.isEmpty ? null : firstname, lastname: lastname.isEmpty ? null : lastname, contactNo: contactNo.isEmpty ? null : contactNo, province: province.isEmpty ? null : province, city: city.isEmpty ? null : city, barangay: barangay.isEmpty ? null : barangay, postalCode: postalCode.isEmpty ? null : postalCode, streetName: streetName.isEmpty ? null : streetName, labelAs: labelAs.isEmpty ? null : labelAs);
+        }
+      } else {
+        await Auth().addAddress(firstname: firstname.isEmpty ? null : firstname, lastname: lastname.isEmpty ? null : lastname, contactNo: contactNo.isEmpty ? null : contactNo, province: province.isEmpty ? null : province, city: city.isEmpty ? null : city, barangay: barangay.isEmpty ? null : barangay, postalCode: postalCode.isEmpty ? null : postalCode, streetName: streetName.isEmpty ? null : streetName, labelAs: labelAs.isEmpty ? null : labelAs, isDefault: _addresses.isEmpty);
+      }
+      if (!mounted) return;
+      await _loadAddresses();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Address saved successfully.'), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', '')), behavior: SnackBarBehavior.floating),
+      );
+    }
+  }
+
+  Future<void> _onSelectAddress(int index) async {
+    setState(() => _selectedIndex = index);
+    final a = _addresses[index];
+    if (a['is_default'] == true) return;
+    final id = a['id'];
+    if (id == null) return;
+    final idInt = id is int ? id : int.tryParse(id.toString());
+    if (idInt == null) return;
+    try {
+      await Auth().setDefaultAddress(idInt);
+      if (mounted) await _loadAddresses();
+    } catch (_) {
+      if (mounted) await _loadAddresses();
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAddresses();
+  }
+
+  String _phoneDisplay(String contact) {
+    final s = contact.replaceAll(RegExp(r'[\s\-+()]'), '');
+    if (s.length >= 10) {
+      return "(+63) ${s.substring(0, 3)} ${s.substring(3, 6)} ${s.substring(6)}";
+    }
+    return contact;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leadingWidth: 43,
+        leading: Transform.translate(
+          offset: const Offset(20, 0),
+          child: SizedBox(
+            child: Material(
+              color: const Color(0xFFF2F2F2),
+              shape: const CircleBorder(),
+              clipBehavior: Clip.hardEdge,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () {
+                  if (widget.forCheckout && _addresses.isNotEmpty) {
+                    Navigator.pop(context, _addresses[_selectedIndex]);
+                  } else {
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Center(child: Icon(Icons.arrow_back, size: 20, color: Colors.black)),
+              ),
+            ),
+          ),
+        ),
+        title: const Text(
+          "Address Selection",
+          style: TextStyle(fontWeight: FontWeight.w500, fontSize: 18, color: Colors.black),
+        ),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: Text(
+                "Address",
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400, color: Color(0xFF505050)),
+              ),
+            ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                itemCount: _addresses.length,
+                itemBuilder: (context, index) {
+                  final a = _addresses[index];
+                  final name = "${a["firstName"] ?? ""} ${a["lastName"] ?? ""}".trim();
+                  final phone = _phoneDisplay((a["contact"] ?? "").toString());
+                  final fullAddress = a["fullAddress"] as String? ?? "";
+                  final isSelected = _selectedIndex == index;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F5F5),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE0E0E0)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              GestureDetector(
+                                onTap: () => _onSelectAddress(index),
+                                child: Container(
+                                  width: 22,
+                                  height: 22,
+                                  margin: const EdgeInsets.only(top: 2),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: isSelected ? const Color(0xFFE3001B) : const Color(0xFF9D9D9D),
+                                      width: 2,
+                                    ),
+                                    color: isSelected ? const Color(0xFFE3001B) : Colors.transparent,
+                                  ),
+                                  child: isSelected
+                                      ? const Center(child: Icon(Icons.circle, size: 8, color: Colors.white))
+                                      : null,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            name.isEmpty ? "—" : name,
+                                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF1C1B1F)),
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () async {
+                                            final initial = Map<String, dynamic>.from(a);
+                                            final result = await Navigator.push<Map<String, dynamic>>(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) => AddressFormPage(initialAddress: initial),
+                                              ),
+                                            );
+                                            if (result != null && mounted) {
+                                              await _saveAddressFromForm(result);
+                                            }
+                                          },
+                                          child: const Text(
+                                            "Edit",
+                                            style: TextStyle(fontSize: 14, color: Color(0xFF898989), fontWeight: FontWeight.w500),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      phone,
+                                      style: const TextStyle(fontSize: 13, color: Color(0xFF505050)),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      fullAddress,
+                                      style: const TextStyle(fontSize: 13, color: Color(0xFF1C1B1F), height: 1.35),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (a['is_default'] == true) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: const Color(0xFFE3001B)),
+                                        ),
+                                        child: const Text(
+                                          "Default",
+                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1C1B1F)),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final result = await Navigator.push<Map<String, dynamic>>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const AddressFormPage(initialAddress: null),
+                    ),
+                  );
+                  if (result != null && mounted) {
+                    await _saveAddressFromForm(result);
+                  }
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFE3001B),
+                  side: const BorderSide(color: Color(0xFFE3001B)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.add, size: 22, color: Color(0xFFE3001B)),
+                label: const Text("Add a new address", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Color(0xFFE3001B))),
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -417,6 +417,228 @@ class Auth {
     throw Exception(msg.isNotEmpty ? msg : 'Could not fetch account.');
   }
 
+  /// Update address. PUT or POST /api/v1/address with Bearer token.
+  /// Body: province, city, barangay, postal_code, street_name, label_as (all optional but at least one required).
+  Future<Map<String, dynamic>> updateAddress({
+    String? province,
+    String? city,
+    String? barangay,
+    String? postalCode,
+    String? streetName,
+    String? labelAs,
+    String? reason,
+  }) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Not authenticated.');
+    }
+
+    final body = <String, dynamic>{};
+    if (province != null && province.isNotEmpty) body['province'] = province;
+    if (city != null && city.isNotEmpty) body['city'] = city;
+    if (barangay != null && barangay.isNotEmpty) body['barangay'] = barangay;
+    if (postalCode != null && postalCode.isNotEmpty) body['postal_code'] = postalCode;
+    if (streetName != null && streetName.isNotEmpty) body['street_name'] = streetName;
+    if (labelAs != null && labelAs.isNotEmpty) body['label_as'] = labelAs;
+    if (reason != null && reason.isNotEmpty) body['reason'] = reason;
+
+    if (body.isEmpty) {
+      throw Exception('Provide at least one address field to update.');
+    }
+
+    final uri = Uri.parse('$_apiBaseUrl/address');
+    final response = await http.put(
+      uri,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+
+    final data = _decodeJson(response.body);
+
+    if (response.statusCode == 200 && (data['success'] == true)) {
+      final customer = data['customer'];
+      if (customer is Map<String, dynamic>) {
+        await _saveCustomerCache(customer);
+        return customer;
+      }
+    }
+
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not update address.');
+  }
+
+  // --- Customer addresses (customer_addresses table): GET list, POST add, PUT update, DELETE, set default ---
+
+  /// List all addresses. GET /api/v1/addresses. Returns list of address maps.
+  Future<List<Map<String, dynamic>>> getAddresses() async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+    final uri = Uri.parse('$_apiBaseUrl/addresses');
+    final response = await http.get(
+      uri,
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    final data = _decodeJson(response.body);
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+    if (response.statusCode != 200 || data['success'] != true) {
+      final msg = _extractMessage(data);
+      throw Exception(msg.isNotEmpty ? msg : 'Could not load addresses.');
+    }
+    final inner = data['data'];
+    final list = inner is Map<String, dynamic> ? inner['addresses'] : null;
+    if (list is! List) return [];
+    return list.map((e) => e is Map<String, dynamic> ? Map<String, dynamic>.from(e) : <String, dynamic>{}).toList();
+  }
+
+  /// Add a new address. POST /api/v1/addresses. Saves to customer_addresses table.
+  Future<Map<String, dynamic>> addAddress({
+    String? firstname,
+    String? lastname,
+    String? contactNo,
+    String? province,
+    String? city,
+    String? barangay,
+    String? postalCode,
+    String? streetName,
+    String? labelAs,
+    bool? isDefault,
+  }) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+    final body = <String, dynamic>{};
+    if (firstname != null && firstname.isNotEmpty) body['firstname'] = firstname;
+    if (lastname != null && lastname.isNotEmpty) body['lastname'] = lastname;
+    if (contactNo != null && contactNo.isNotEmpty) body['contact_no'] = contactNo;
+    if (province != null && province.isNotEmpty) body['province'] = province;
+    if (city != null && city.isNotEmpty) body['city'] = city;
+    if (barangay != null && barangay.isNotEmpty) body['barangay'] = barangay;
+    if (postalCode != null && postalCode.isNotEmpty) body['postal_code'] = postalCode;
+    if (streetName != null && streetName.isNotEmpty) body['street_name'] = streetName;
+    if (labelAs != null && labelAs.isNotEmpty) body['label_as'] = labelAs;
+    if (isDefault != null) body['is_default'] = isDefault;
+    final uri = Uri.parse('$_apiBaseUrl/addresses');
+    final response = await http.post(
+      uri,
+      headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+      body: jsonEncode(body),
+    );
+    final data = _decodeJson(response.body);
+    if (response.statusCode == 201 && (data['success'] == true)) {
+      final d = data['data'];
+      return d is Map<String, dynamic> ? d : <String, dynamic>{};
+    }
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not add address.');
+  }
+
+  /// Update an address. PUT /api/v1/addresses/{id}.
+  Future<Map<String, dynamic>> updateAddressById(int id, {
+    String? firstname,
+    String? lastname,
+    String? contactNo,
+    String? province,
+    String? city,
+    String? barangay,
+    String? postalCode,
+    String? streetName,
+    String? labelAs,
+    bool? isDefault,
+  }) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+    final body = <String, dynamic>{};
+    if (firstname != null && firstname.isNotEmpty) body['firstname'] = firstname;
+    if (lastname != null && lastname.isNotEmpty) body['lastname'] = lastname;
+    if (contactNo != null && contactNo.isNotEmpty) body['contact_no'] = contactNo;
+    if (province != null && province.isNotEmpty) body['province'] = province;
+    if (city != null && city.isNotEmpty) body['city'] = city;
+    if (barangay != null && barangay.isNotEmpty) body['barangay'] = barangay;
+    if (postalCode != null && postalCode.isNotEmpty) body['postal_code'] = postalCode;
+    if (streetName != null && streetName.isNotEmpty) body['street_name'] = streetName;
+    if (labelAs != null && labelAs.isNotEmpty) body['label_as'] = labelAs;
+    if (isDefault != null) body['is_default'] = isDefault;
+    final uri = Uri.parse('$_apiBaseUrl/addresses/$id');
+    final response = await http.put(
+      uri,
+      headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+      body: jsonEncode(body),
+    );
+    final data = _decodeJson(response.body);
+    if (response.statusCode == 200 && (data['success'] == true)) {
+      final d = data['data'];
+      return d is Map<String, dynamic> ? d : <String, dynamic>{};
+    }
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+    if (response.statusCode == 404) throw Exception('Address not found.');
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not update address.');
+  }
+
+  /// Delete an address. DELETE /api/v1/addresses/{id}.
+  Future<void> deleteAddress(int id) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+    final uri = Uri.parse('$_apiBaseUrl/addresses/$id');
+    final response = await http.delete(
+      uri,
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    final data = _decodeJson(response.body);
+    if (response.statusCode == 200 && (data['success'] == true)) return;
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+    if (response.statusCode == 404) throw Exception('Address not found.');
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not delete address.');
+  }
+
+  /// Set an address as default. POST /api/v1/addresses/{id}/default.
+  Future<void> setDefaultAddress(int id) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+    final uri = Uri.parse('$_apiBaseUrl/addresses/$id/default');
+    final response = await http.post(
+      uri,
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    final data = _decodeJson(response.body);
+    if (response.statusCode == 200 && (data['success'] == true)) return;
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+    if (response.statusCode == 404) throw Exception('Address not found.');
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not set default address.');
+  }
+
   /// Update profile. POST /api/v1/profile/update with Bearer token.
   /// Pass imagePath (file path from image_picker) for file upload, or imageBase64 for JSON.
   Future<Map<String, dynamic>> updateProfile({

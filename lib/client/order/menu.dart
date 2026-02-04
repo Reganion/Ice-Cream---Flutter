@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/order/cart.dart';
 import 'package:ice_cream/client/order/deliverTracker.dart';
-import 'package:ice_cream/client/order/gcash.dart';
 import 'package:ice_cream/client/order/manage_address.dart';
+import 'package:ice_cream/client/profile/profile.dart';
 import 'package:intl/intl.dart';
 
 class MenuPage extends StatefulWidget {
@@ -2301,7 +2301,56 @@ class _CheckoutPageState extends State<CheckoutPage> {
   /// null = "No selected", 0.25/0.5/0.75/1.0 = percentage of total
   double? selectedDownPaymentPercent;
 
+  /// Address shown in Place Order: from profile (API) or chosen in Address Selection.
+  Map<String, dynamic>? _checkoutAddress;
+  bool _loadingAddress = true;
+
   double get _totalPayment => widget.cartSubtotal ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCheckoutAddress();
+  }
+
+  Future<void> _loadCheckoutAddress() async {
+    try {
+      final list = await Auth().getAddresses();
+      if (!mounted) return;
+      if (list.isEmpty) {
+        setState(() {
+          _checkoutAddress = null;
+          _loadingAddress = false;
+        });
+        return;
+      }
+      Map<String, dynamic> pick = list.first;
+      for (final e in list) {
+        if (e['is_default'] == true) { pick = e; break; }
+      }
+      final fullAddress = (pick['full_address'] ?? '').toString().trim();
+      setState(() {
+        _checkoutAddress = {
+          'firstName': (pick['firstname'] ?? '').toString().trim(),
+          'lastName': (pick['lastname'] ?? '').toString().trim(),
+          'contact': (pick['contact_no'] ?? '').toString().trim(),
+          'fullAddress': fullAddress.isNotEmpty ? fullAddress : null,
+        };
+        _loadingAddress = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() {
+        _checkoutAddress = null;
+        _loadingAddress = false;
+      });
+    }
+  }
+
+  static String _formatPhone(String contact) {
+    final s = contact.replaceAll(RegExp(r'[\s\-+()]'), '');
+    if (s.length >= 10) return "(+63) ${s.substring(0, 3)} ${s.substring(3, 6)} ${s.substring(6)}";
+    return contact.isEmpty ? "—" : contact;
+  }
 
   String get _summarySubtotal =>
       '₱${NumberFormat('#,##0').format(widget.cartSubtotal ?? 0)}';
@@ -2320,10 +2369,16 @@ class _CheckoutPageState extends State<CheckoutPage> {
     return null;
   }
 
+  String? get _paymentMethodError {
+    if (selectedPayment.isEmpty) return "Payment method is required*";
+    return null;
+  }
+
   bool get _canPlaceOrder =>
       selectedDate != null &&
       selectedTime != null &&
-      selectedDownPaymentPercent != null;
+      selectedDownPaymentPercent != null &&
+      selectedPayment.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -2365,7 +2420,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                    'Please complete delivery schedule and select down payment.',
+                    'Please complete delivery schedule, select down payment, and choose a payment method.',
                   ),
                   behavior: SnackBarBehavior.floating,
                 ),
@@ -2404,51 +2459,79 @@ class _CheckoutPageState extends State<CheckoutPage> {
             _buildSection(
               title: "Address details",
               trailing: "Edit",
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 1,
-                    child: Column(
+              onEditAddress: () async {
+                final result = await Navigator.push<Map<String, dynamic>>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AddressDetailsPage(forCheckout: true),
+                  ),
+                );
+                if (result != null && mounted) {
+                  setState(() => _checkoutAddress = result);
+                }
+              },
+              child: _loadingAddress
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Text(
-                          "Alma Fe Pepania",
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF1C1B1F),
+                      children: [
+                        Expanded(
+                          flex: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _checkoutAddress != null
+                                    ? "${(_checkoutAddress!["firstName"] ?? "").toString().trim()} ${(_checkoutAddress!["lastName"] ?? "").toString().trim()}".trim()
+                                    : "—",
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1C1B1F),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _checkoutAddress != null
+                                    ? _formatPhone((_checkoutAddress!["contact"] ?? "").toString())
+                                    : "—",
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF1C1B1F),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        SizedBox(height: 4),
-                        Text(
-                          "(+63) 9123456789",
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF1C1B1F),
-                            fontWeight: FontWeight.w500,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            _checkoutAddress != null
+                                ? (_checkoutAddress!["fullAddress"] ?? "").toString().trim().isEmpty
+                                    ? "—"
+                                    : (_checkoutAddress!["fullAddress"] ?? "").toString()
+                                : "No address. Tap Edit to choose or add one.",
+                            style: const TextStyle(
+                              fontSize: 12,
+                              height: 1.4,
+                              color: Color(0xFF1C1B1F),
+                              fontWeight: FontWeight.w400,
+                            ),
+                            textAlign: TextAlign.right,
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: Text(
-                      "ACLC COLLEGE OF MANDAUE BRIONES ST. MAGUIKAY MANDAUE CITY, CEBU",
-                      style: const TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: Color(0xFF1C1B1F),
-                        fontWeight: FontWeight.w400,
-                      ),
-                      textAlign: TextAlign.right,
-                    ),
-                  ),
-                ],
-              ),
             ),
             _buildSection(
               title: "Product Order",
@@ -2683,6 +2766,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
             ),
             _buildSection(
               title: "Payment Method",
+              validationError: _paymentMethodError,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2709,17 +2793,143 @@ class _CheckoutPageState extends State<CheckoutPage> {
                     },
                   ),
 
-                  const SizedBox(
-                    height: 5,
-                  ), // you can also reduce this if needed
-                  // --- Payment Tiles ---
-                  _paymentTile(
-                    title: "Gcash",
-                    subtitle: "Not linked",
-                    asset: "lib/client/order/images/gcsh.png",
-                    value: "gcash",
+                  const SizedBox(height: 8),
+                  // --- Payment options: Gcash (left) + COD (right), each with circle select ---
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => selectedPayment = "gcash"),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: selectedPayment == "gcash"
+                                  ? const Color(0xFFE3001B).withOpacity(0.08)
+                                  : const Color(0xFFF5F5F5),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: selectedPayment == "gcash"
+                                    ? const Color(0xFFE3001B)
+                                    : const Color(0xFFD9D9D9),
+                                width: selectedPayment == "gcash" ? 1.5 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Image.asset(
+                                  "lib/client/order/images/gcsh.png",
+                                  width: 36,
+                                  height: 36,
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text(
+                                    "Gcash",
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF1C1B1F),
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  width: 22,
+                                  height: 22,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: selectedPayment == "gcash"
+                                          ? const Color(0xFFE3001B)
+                                          : const Color(0xFF9D9D9D),
+                                      width: 2,
+                                    ),
+                                    color: selectedPayment == "gcash"
+                                        ? const Color(0xFFE3001B)
+                                        : Colors.transparent,
+                                  ),
+                                  child: selectedPayment == "gcash"
+                                      ? const Center(
+                                          child: Icon(Icons.circle, size: 8, color: Colors.white),
+                                        )
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => selectedPayment = "cod"),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: selectedPayment == "cod"
+                                  ? const Color(0xFFE3001B).withOpacity(0.08)
+                                  : const Color(0xFFF5F5F5),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: selectedPayment == "cod"
+                                    ? const Color(0xFFE3001B)
+                                    : const Color(0xFFD9D9D9),
+                                width: selectedPayment == "cod" ? 1.5 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE8E8E8),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.payments,
+                                    size: 24,
+                                    color: Color(0xFF505050),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text(
+                                    "COD",
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF1C1B1F),
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  width: 22,
+                                  height: 22,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: selectedPayment == "cod"
+                                          ? const Color(0xFFE3001B)
+                                          : const Color(0xFF9D9D9D),
+                                      width: 2,
+                                    ),
+                                    color: selectedPayment == "cod"
+                                        ? const Color(0xFFE3001B)
+                                        : Colors.transparent,
+                                  ),
+                                  child: selectedPayment == "cod"
+                                      ? const Center(
+                                          child: Icon(Icons.circle, size: 8, color: Colors.white),
+                                        )
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-             
                 ],
               ),
             ),
@@ -2755,6 +2965,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
     String? trailing,
     EdgeInsets? padding,
     String? validationError,
+    VoidCallback? onEditAddress,
     required Widget child,
   }) {
     bool isAddress = title == "Address details";
@@ -2833,12 +3044,16 @@ class _CheckoutPageState extends State<CheckoutPage> {
                       padding: const EdgeInsets.only(right: 6),
                       child: GestureDetector(
                         onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ManageAddressPage(),
-                            ),
-                          );
+                          if (isAddress && onEditAddress != null) {
+                            onEditAddress();
+                          } else if (isAddress) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ManageAddressPage(),
+                              ),
+                            );
+                          }
                         },
                         child: Text(
                           trailing,
@@ -3020,51 +3235,6 @@ class _CheckoutPageState extends State<CheckoutPage> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _paymentTile({
-    required String title,
-    String? subtitle,
-    required String asset,
-    required String value,
-  }) {
-    return Row(
-      children: [
-        Image.asset(asset, width: 40, height: 40),
-        const SizedBox(width: 18),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-            ),
-            if (subtitle != null)
-              Text(
-                subtitle,
-                style: const TextStyle(color: Color(0xFF1C1B1F), fontSize: 12),
-              ),
-          ],
-        ),
-        const Spacer(),
-        GestureDetector(
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (context) => GcashDetailsPage()),
-            );
-          },
-          child: Text(
-            "Link My Account",
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF007CFF),
-              decoration: TextDecoration.none,
-            ),
-          ),
-        ),
-      ],
     );
   }
 
