@@ -20,7 +20,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.ice_cream"
-        minSdk = flutter.minSdkVersion   // REQUIRED FOR GOOGLE SIGN-IN + FIREBASE
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

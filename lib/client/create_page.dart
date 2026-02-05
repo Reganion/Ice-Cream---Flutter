@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ice_cream/auth.dart';
-import 'package:ice_cream/client/forgot_password.dart';
 import 'package:ice_cream/client/home_page.dart';
 import 'login_page.dart'; // or the correct file path
 import 'dart:async';
@@ -34,6 +34,8 @@ class _SignUpPageState extends State<SignUpPage> {
   final FocusNode _focusNodeEmail = FocusNode();
   final FocusNode _focusNodePassword = FocusNode();
   final FocusNode _focusNodeConfirmPassword = FocusNode();
+  bool _isGoogleLoading = false;
+
   @override
   void dispose() {
     _focusNodeFirst.dispose();
@@ -61,6 +63,10 @@ class _SignUpPageState extends State<SignUpPage> {
         _showPasswordEye = _passwordController.text.isNotEmpty;
       });
     });
+  }
+
+  Future<void> _signUpWithGoogle() async {
+    // Google Sign-In disabled; UI only.
   }
 
   @override
@@ -310,72 +316,46 @@ class _SignUpPageState extends State<SignUpPage> {
                       ),
                       const SizedBox(height: 30),
 
-                      // GOOGLE BUTTON
                       SizedBox(
                         height: 55,
                         child: OutlinedButton(
-                          onPressed: () async {
-                            try {
-                              final user = await Auth().signInWithGoogle();
-                              if (!mounted) return;
-                              if (user != null && user.isNotEmpty) {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const HomePage(),
-                                  ),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text("Sign-up cancelled"),
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    e is Exception
-                                        ? e.toString().replaceFirst('Exception: ', '')
-                                        : 'Google Sign-Up failed',
-                                  ),
-                                ),
-                              );
-                            }
-                          },
-
+                          onPressed: _isGoogleLoading ? null : _signUpWithGoogle,
                           style: OutlinedButton.styleFrom(
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Image.asset(
-                                'lib/client/images/CL_page/ggl.png',
-                                height: 50,
-                                width: 50,
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                "Sign Up with Google",
-                                style: TextStyle(
-                                  fontSize: 14.27,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.w400,
+                          child: _isGoogleLoading
+                              ? const SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Image.asset(
+                                      'lib/client/images/CL_page/ggl.png',
+                                      height: 50,
+                                      width: 50,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      "Sign Up with Google",
+                                      style: TextStyle(
+                                        fontSize: 14.27,
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ),
                         ),
                       ),
 
-                      const SizedBox(height: 7),
+                      const Spacer(),
 
-                      // Login Link
+                      // Login Link - at bottom
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -399,7 +379,7 @@ class _SignUpPageState extends State<SignUpPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 0),
+                      const SizedBox(height: 16),
                     ],
                   ),
                 ),

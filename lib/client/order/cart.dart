@@ -14,7 +14,7 @@ class CartPage extends StatefulWidget {
   _CartPageState createState() => _CartPageState();
 }
 
-/// Cart item from API: id, quantity, flavor (name, image), gallon (size, addon_price), line_total.
+/// Cart item from API: id, quantity, flavor (name, image, category), gallon (size, addon_price), line_total.
 class CartItem {
   final int id;
   int quantity;
@@ -22,6 +22,8 @@ class CartItem {
   final String image;
   final bool isNetworkImage;
   final String size;
+  /// Display category under product name (e.g. "Plain Flavors", "Special Flavors", "Toppings").
+  final String category;
   final double lineTotal;
   /// Gallon addon price per unit (from API gallon.addon_price or gallon.price).
   final double gallonAddonPrice;
@@ -35,6 +37,7 @@ class CartItem {
     required this.isNetworkImage,
     required this.size,
     required this.lineTotal,
+    this.category = '',
     this.gallonAddonPrice = 0,
     this.selected = false,
   });
@@ -53,6 +56,14 @@ class _CartPageState extends State<CartPage> {
     if (path == null || path.isEmpty) return "";
     final base = Auth.apiBaseUrl.replaceAll('/api/v1', '');
     return path.startsWith('http') ? path : '$base/$path';
+  }
+
+  static String _normalizeCategory(String? category) {
+    if (category == null || category.isEmpty) return 'Plain Flavors';
+    final c = category.toLowerCase().trim();
+    if (c.contains('special')) return 'Special Flavors';
+    if (c.contains('topping')) return 'Toppings';
+    return 'Plain Flavors';
   }
 
   static String _formatPrice(double value) {
@@ -115,6 +126,8 @@ class _CartPageState extends State<CartPage> {
         final image = _imageUrl(imagePath);
         final isNetwork = image.isNotEmpty && image.startsWith('http');
         final size = gallon?['size'] as String? ?? '—';
+        final catRaw = flavor?['category'] as String?;
+        final category = _normalizeCategory(catRaw);
         final addonRaw = gallon?['addon_price'] ?? gallon?['price'];
         final gallonAddon = addonRaw is num
             ? addonRaw.toDouble()
@@ -126,6 +139,7 @@ class _CartPageState extends State<CartPage> {
           image: image.isEmpty ? 'lib/client/order/images/sb.png' : image,
           isNetworkImage: isNetwork,
           size: size,
+          category: category,
           lineTotal: lineTotal,
           gallonAddonPrice: gallonAddon,
           selected: false,

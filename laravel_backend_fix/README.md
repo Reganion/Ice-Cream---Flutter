@@ -21,7 +21,7 @@ This middleware:
 Cache::put(AuthenticateApiCustomer::CACHE_PREFIX . $token, $customer->id, now()->addMinutes(AuthenticateApiCustomer::TTL_MINUTES));
 ```
 
-If your current login uses a different prefix, either change the middleware’s `CACHE_PREFIX` to match, or change the login to use `AuthenticateApiCustomer::CACHE_PREFIX`.
+If your current login uses a different prefix, either change the middleware's `CACHE_PREFIX` to match, or change the login to use `AuthenticateApiCustomer::CACHE_PREFIX`.
 
 ## 2. Routes: protect account/profile with `api.customer`
 
@@ -65,3 +65,29 @@ Your login already returns:
 ```
 
 The Flutter app reads `token` and sends it as `Authorization: Bearer {token}` on GET /api/v1/account. Once the middleware above is in place and the routes use `api.customer`, `$request->user()` will be set and "Not authenticated" will be fixed.
+
+---
+
+## Admin notifications (new orders & profile updates)
+
+When a **customer places an order** or **updates their profile**, the admin side is notified.
+
+### What was added
+
+- **Model:** `App\Models\AdminNotification` – stores admin notifications with `type` (`new_order`, `profile_updated`), `title`, `message`, `image_url`, `related_type`, `related_id`, `data`, `read_at`.
+- **Migration:** `database/migrations/2025_02_05_000000_create_admin_notifications_table.php` – run `php artisan migrate` to create the `admin_notifications` table.
+- **Controller:** `App\Http\Controllers\Api\ApiAdminNotificationController` – list, unread count, mark read, mark all read.
+- **Triggers:**
+  - **Order:** In `ApiOrderController::store`, after creating the order and the customer notification, `AdminNotification::notifyNewOrder($order)` is called.
+  - **Profile:** In `ApiAuthController::updateProfile`, after updating the customer, `AdminNotification::notifyProfileUpdated($customer->fresh())` is called.
+
+### Admin API routes (add to your `routes/api.php` under prefix `v1`)
+
+Protect these with your admin auth middleware (e.g. `auth:sanctum` + admin role check):
+
+- `GET  /admin/notifications` – paginated list (`?page=1&per_page=20&unread_only=0`)
+- `GET  /admin/notifications/unread-count` – badge count
+- `POST /admin/notifications/{id}/read` – mark one as read
+- `POST /admin/notifications/read-all` – mark all as read
+
+See `routes/api_routes_example.php` for the route definitions. Copy the `AdminNotification` model, migration, and `ApiAdminNotificationController` into your main Laravel app, run the migration, and ensure your existing `ApiOrderController::store` calls `AdminNotification::notifyNewOrder($order)` after creating the order (the version in this folder already does).

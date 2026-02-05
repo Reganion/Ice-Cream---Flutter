@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/order/cart.dart';
-import 'package:ice_cream/client/order/deliverTracker.dart';
+import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/order/manage_address.dart';
 import 'package:ice_cream/client/profile/profile.dart';
 import 'package:intl/intl.dart';
@@ -1716,6 +1716,7 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
                     image: img,
                     isNetworkImage: isFlavorNetwork,
                     size: selectedSize.isEmpty ? "—" : selectedSize,
+                    category: item?["category"] as String? ?? "Plain Flavors",
                     lineTotal: lineTotal,
                     gallonAddonPrice: selectedGallonAddonPrice,
                   );
@@ -2304,6 +2305,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
   /// Address shown in Place Order: from profile (API) or chosen in Address Selection.
   Map<String, dynamic>? _checkoutAddress;
   bool _loadingAddress = true;
+  bool _placingOrder = false;
 
   double get _totalPayment => widget.cartSubtotal ?? 0;
 
@@ -2380,6 +2382,118 @@ class _CheckoutPageState extends State<CheckoutPage> {
       selectedDownPaymentPercent != null &&
       selectedPayment.isNotEmpty;
 
+  /// Sends only needed order details to backend, then redirects to home with success alert.
+  /// Backend creates order(s) and notifies admin.
+  Future<void> _placeOrder() async {
+    if (!_canPlaceOrder) return;
+    final items = widget.cartItems;
+    if (items == null || items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No items to order.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final address = _checkoutAddress;
+    final fullAddress = (address?['fullAddress'] ?? '').toString().trim();
+    if (fullAddress.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please set a delivery address.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to place an order.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    setState(() => _placingOrder = true);
+    final base = Auth.apiBaseUrl;
+    final deliveryDate = DateFormat('yyyy-MM-dd').format(selectedDate!);
+    final deliveryTime =
+        '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}';
+    final paymentMethod = selectedPayment == 'gcash' ? 'Gcash' : 'Cash on Delivery';
+
+    try {
+      for (final item in items) {
+        final res = await http.post(
+          Uri.parse('$base/orders'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({
+            'product_name': item.name,
+            'product_type': item.category.isNotEmpty ? item.category : 'Plain Flavors',
+            'gallon_size': item.size,
+            'delivery_date': deliveryDate,
+            'delivery_time': deliveryTime,
+            'delivery_address': fullAddress,
+            'amount': item.lineTotal,
+            'payment_method': paymentMethod,
+          }),
+        );
+        if (!mounted) return;
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>?;
+          final message = body?['message'] as String? ?? 'Failed to place order.';
+          setState(() => _placingOrder = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+          );
+          return;
+        }
+      }
+      if (!mounted) return;
+      setState(() => _placingOrder = false);
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const HomePage()),
+        (route) => false,
+      );
+      if (!context.mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('Order placed'),
+          content: const Text(
+            'Your order has been placed successfully. You will be notified when it is confirmed.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _placingOrder = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not place order: ${e.toString()}'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2427,13 +2541,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
               );
               return;
             }
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DeliveryTrackerPage()),
-            );
+            _placeOrder();
           },
           child: AnimatedOpacity(
-            opacity: _canPlaceOrder ? 1 : 0.5,
+            opacity: _canPlaceOrder && !_placingOrder ? 1 : 0.5,
             duration: const Duration(milliseconds: 200),
             child: Container(
               height: 55,
@@ -2441,11 +2552,20 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 color: const Color(0xFFE3001B),
                 borderRadius: BorderRadius.circular(35),
               ),
-              child: const Center(
-                child: Text(
-                  "Place Order",
-                  style: TextStyle(color: Colors.white, fontSize: 16),
-                ),
+              child: Center(
+                child: _placingOrder
+                    ? const SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text(
+                        "Place Order",
+                        style: TextStyle(color: Colors.white, fontSize: 16),
+                      ),
               ),
             ),
           ),
@@ -2592,7 +2712,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
-                                          item.size,
+                                          item.category.isNotEmpty ? item.category : 'Plain Flavors',
                                           style: const TextStyle(
                                             fontSize: 11,
                                             color: Color(0xFF9D9D9D),

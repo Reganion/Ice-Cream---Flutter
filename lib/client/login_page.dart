@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/forgot_password.dart';
 import 'create_page.dart'; // or the correct file path
@@ -32,6 +33,8 @@ class _LoginPageState extends State<LoginPage> {
   Color _emailBorderColor = const Color(0xFFFAFAFA);
   Color _passwordBorderColor = const Color(0xFFFAFAFA);
 
+  bool _isGoogleLoading = false;
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +59,10 @@ class _LoginPageState extends State<LoginPage> {
     _focusNodeEmail.dispose();
     _focusNodePassword.dispose();
     super.dispose();
+  }
+
+  Future<void> _signInWithGoogle() async {
+    // Google Sign-In disabled; UI only.
   }
 
   @override
@@ -283,62 +290,37 @@ class _LoginPageState extends State<LoginPage> {
                         width: double.infinity,
                         height: 55,
                         child: OutlinedButton(
-                          onPressed: () async {
-                            try {
-                              final user = await Auth().signInWithGoogle();
-                              if (!context.mounted) return;
-                              if (user != null && user.isNotEmpty) {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const HomePage(),
-                                  ),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text("Sign-in cancelled"),
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    e is Exception
-                                        ? e.toString().replaceFirst('Exception: ', '')
-                                        : 'Google Sign-In failed',
-                                  ),
-                                ),
-                              );
-                            }
-                          },
-
+                          onPressed: _isGoogleLoading ? null : _signInWithGoogle,
                           style: OutlinedButton.styleFrom(
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Image.asset(
-                                'lib/client/images/CL_page/ggl.png',
-                                height: 50,
-                                width: 50,
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                'Sign In with Google',
-                                style: TextStyle(
-                                  fontSize: 14.27,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.w400,
+                          child: _isGoogleLoading
+                              ? const SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Image.asset(
+                                      'lib/client/images/CL_page/ggl.png',
+                                      height: 50,
+                                      width: 50,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      'Sign In with Google',
+                                      style: TextStyle(
+                                        fontSize: 14.27,
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ),
                         ),
                       ),
                       const Spacer(),

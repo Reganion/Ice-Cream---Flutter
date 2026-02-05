@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/services.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -875,70 +873,6 @@ class Auth {
     }
     await _clearToken();
     await _clearCustomerCache();
-  }
-
-  /// Web client ID: used so Google returns an id_token (Laravel verifies with GOOGLE_CLIENT_ID).
-  static const String? googleServerClientId =
-      '718217481412-6idv5qkd81vavjd2qsilp0m416ddt1rv.apps.googleusercontent.com';
-
-  /// Google Sign-In / Sign-Up: get id_token from Google, send to Laravel POST /api/v1/auth/google.
-  /// Returns customer map on success. Returns null only if user cancels. Throws with backend message on API/network error.
-  Future<Map<String, dynamic>?> signInWithGoogle() async {
-    GoogleSignIn? googleSignIn;
-    try {
-      googleSignIn = GoogleSignIn(
-        scopes: ['email', 'profile'],
-        serverClientId: googleServerClientId,
-      );
-      final account = await googleSignIn.signIn();
-      if (account == null) return null;
-
-      final auth = await account.authentication;
-      final idToken = auth.idToken;
-      if (idToken == null || idToken.isEmpty) {
-        throw Exception(
-          'Google did not return an id token. On Android: add an OAuth 2.0 Android client in Google Cloud (package name + SHA-1) and set GOOGLE_ANDROID_CLIENT_ID in Laravel .env.',
-        );
-      }
-
-      final uri = Uri.parse('$_apiBaseUrl/auth/google');
-      http.Response response;
-      try {
-        response = await http.post(
-          uri,
-          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-          body: jsonEncode({'id_token': idToken}),
-        );
-      } catch (e) {
-        _throwConnectionError(e);
-      }
-
-      final data = _decodeJson(response.body);
-
-      if (response.statusCode == 200 && (data['success'] == true)) {
-        final token = _extractToken(data);
-        if (token != null) await _saveToken(token);
-        final customer = data['customer'];
-        final customerMap = customer is Map<String, dynamic> ? customer : <String, dynamic>{};
-        if (customerMap.isNotEmpty) await _saveCustomerCache(customerMap);
-        return customerMap;
-      }
-
-      await googleSignIn.signOut();
-      final msg = _extractMessage(data);
-      final debug = data['debug'];
-      final debugStr = (debug != null && msg.isNotEmpty) ? ' $debug' : '';
-      throw Exception(msg.isNotEmpty ? msg + debugStr : 'Google sign-in failed.');
-    } on PlatformException catch (e) {
-      if (e.code == 'sign_in_failed' || (e.message ?? '').contains('Api')) {
-        throw Exception(
-          'Google sign-in failed on device. Check: (1) Google Cloud → Credentials → Android OAuth client: package com.example.ice_cream, SHA-1 56:3F:52:D9:58:F1:D4:A5:D3:2E:23:58:3B:9B:36:B8:BB:5D:77:51 (use letter D in D9, not zero). (2) Device has Google Play. (3) OAuth consent screen → Test users → add your Google account. (4) Wait a few minutes after creating the client, then flutter clean && flutter run.',
-        );
-      }
-      rethrow;
-    } catch (e) {
-      rethrow;
-    }
   }
 
   Map<String, dynamic> _decodeJson(String body) {
