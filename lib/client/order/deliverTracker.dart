@@ -1,9 +1,100 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:ice_cream/client/messages/messages.dart';
+import 'package:ice_cream/client/order/order_record.dart';
+import 'package:ice_cream/auth.dart';
+import 'package:http/http.dart' as http;
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
-class DeliveryTrackerPage extends StatelessWidget {
-  const DeliveryTrackerPage({super.key});
+class DeliveryTrackerPage extends StatefulWidget {
+  const DeliveryTrackerPage({super.key, required this.order});
+
+  final OrderRecord order;
+
+  @override
+  State<DeliveryTrackerPage> createState() => _DeliveryTrackerPageState();
+}
+
+class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
+  late OrderRecord _order = widget.order;
+  bool _refreshing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Best-effort refresh so status/date stay up to date.
+    _refreshOrder();
+  }
+
+  Future<void> _refreshOrder() async {
+    final token = await Auth.getToken();
+    if (!mounted || token == null || token.isEmpty) return;
+    setState(() => _refreshing = true);
+    try {
+      final uri = Uri.parse('${Auth.apiBaseUrl}/orders/${widget.order.id}');
+      final res = await http.get(
+        uri,
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode == 200) {
+        final data = body?['data'] as Map<String, dynamic>?;
+        if (data != null) setState(() => _order = OrderRecord.fromJson(data));
+      }
+    } catch (_) {
+      // Ignore refresh errors; we still show the passed-in order data.
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  String get _etaLabel {
+    final date = _order.deliveryDate;
+    final time = _order.deliveryTime;
+    if ((date == null || date.isEmpty) && (time == null || time.isEmpty)) return 'Estimated on: —';
+    if (date == null || date.isEmpty) return 'Estimated on: —, $time';
+    if (time == null || time.isEmpty) return 'Estimated on: $date';
+    return 'Estimated on: $date, $time';
+  }
+
+  String get _statusLabel {
+    switch (_order.status) {
+      case 'pending':
+        return 'Pending';
+      case 'assigned':
+        return 'Assigned';
+      case 'driving':
+      case 'on_the_way':
+        return 'Driving';
+      case 'delivered':
+        return 'Delivered';
+      case 'cancelled':
+        return 'Cancelled';
+      case 'walk_in':
+        return 'Walk-in';
+      default:
+        final s = _order.status.trim();
+        if (s.isEmpty) return '—';
+        return s[0].toUpperCase() + s.substring(1);
+    }
+  }
+
+  Color get _statusColor {
+    switch (_order.status) {
+      case 'delivered':
+      case 'walk_in':
+        return const Color(0xFF22B345);
+      case 'cancelled':
+        return const Color(0xFFE3001B);
+      case 'pending':
+      case 'assigned':
+        return const Color(0xFFFF6805);
+      default:
+        return const Color(0xFF7051C7);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -78,15 +169,26 @@ class DeliveryTrackerPage extends StatelessWidget {
                       children: [
                         // Your content here (same as your current Column)
                         Row(
-                          children: const [
-                            Text(
-                              'Estimated on: 21 Nov, 12:30 PM',
-                              style: TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _etaLabel,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                          
+                            if (_refreshing) ...[
+                              const SizedBox(width: 10),
+                              const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            ],
                           ],
                         ),
 
@@ -114,15 +216,15 @@ class DeliveryTrackerPage extends StatelessWidget {
 
                                 Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: const [
+                                  children: [
                                     Text(
-                                      '#32456124',
-                                      style: TextStyle(
+                                      '#${_order.transactionId.isEmpty ? '—' : _order.transactionId}',
+                                      style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                    Text(
+                                    const Text(
                                       'Transaction ID',
                                       style: TextStyle(
                                         fontSize: 12,
@@ -138,7 +240,7 @@ class DeliveryTrackerPage extends StatelessWidget {
                             ElevatedButton(
                               onPressed: () {},
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF7051C7),
+                                backgroundColor: _statusColor,
                                 minimumSize: const Size(
                                   93,
                                   30,
@@ -147,9 +249,9 @@ class DeliveryTrackerPage extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                               ),
-                              child: const Text(
-                                'Driving',
-                                style: TextStyle(
+                              child: Text(
+                                _statusLabel,
+                                style: const TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w400,
                                   color: Color(0xFFFFFFFF),
@@ -178,7 +280,7 @@ class DeliveryTrackerPage extends StatelessWidget {
                                 ),
                                 SizedBox(height: 2),
                                 Text(
-                                  'Kyley Reganion',
+                                  '—',
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -190,8 +292,8 @@ class DeliveryTrackerPage extends StatelessWidget {
                             // CENTER - Order Cost
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.center,
-                              children: const [
-                                Padding(
+                              children: [
+                                const Padding(
                                   padding: EdgeInsets.only(
                                     left: 8,
                                   ), // moves only "Created:" left
@@ -204,10 +306,10 @@ class DeliveryTrackerPage extends StatelessWidget {
                                     ),
                                   ),
                                 ),
-                                SizedBox(height: 2),
+                                const SizedBox(height: 2),
                                 Text(
-                                  '\$300.00',
-                                  style: TextStyle(
+                                  _order.amountFormatted,
+                                  style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -217,8 +319,8 @@ class DeliveryTrackerPage extends StatelessWidget {
 
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.end,
-                              children: const [
-                                Padding(
+                              children: [
+                                const Padding(
                                   padding: EdgeInsets.only(
                                     right: 28,
                                   ), // moves only "Created:" left
@@ -231,10 +333,10 @@ class DeliveryTrackerPage extends StatelessWidget {
                                     ),
                                   ),
                                 ),
-                                SizedBox(height: 2),
+                                const SizedBox(height: 2),
                                 Text(
-                                  '10/14/2025',
-                                  style: TextStyle(
+                                  _order.createdAtFormatted ?? '—',
+                                  style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -253,171 +355,22 @@ class DeliveryTrackerPage extends StatelessWidget {
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Quantity:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '3',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Size:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '3.5 Gal',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 8),
-
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Flavor:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    'Strawberry',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Flavor cost:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '₱1,700',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-                               Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Gallon cost:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '₱200',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Down payment:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '₱500',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 160,
-                                    child: Text(
-                                      'Contact number:',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w400,
-                                        color: Color(0xFF606060),
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '09785485214',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
+                            children: [
+                              _detailRow('Quantity:', '${_order.quantity}'),
+                              const SizedBox(height: 3),
+                              _detailRow('Size:', _order.gallonSize),
+                              const SizedBox(height: 8),
+                              _detailRow('Flavor:', _order.productName),
+                              const SizedBox(height: 3),
+                              _detailRow('Type:', _order.productType.isEmpty ? '—' : _order.productType),
+                              const SizedBox(height: 3),
+                              _detailRow('Payment method:', _order.paymentMethod ?? '—'),
+                              const SizedBox(height: 3),
+                              _detailRow('Delivery address:', _order.deliveryAddress ?? '—', valueMaxLines: 2),
+                              const SizedBox(height: 3),
+                              const _DetailRow(
+                                label: 'Contact number:',
+                                value: '—',
                               ),
                             ],
                           ),
@@ -433,7 +386,7 @@ class DeliveryTrackerPage extends StatelessWidget {
                                 onTap: () {
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
-                                      builder: (context) => ChatPage(phoneNumber: '09785485214'),
+                                      builder: (context) => const ChatPage(),
                                     ),
                                   );
                                 },
@@ -490,6 +443,53 @@ class DeliveryTrackerPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+Widget _detailRow(String label, String value, {int valueMaxLines = 1}) {
+  return _DetailRow(label: label, value: value, valueMaxLines: valueMaxLines);
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.valueMaxLines = 1,
+  });
+
+  final String label;
+  final String value;
+  final int valueMaxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: valueMaxLines > 1 ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 160,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+              color: Color(0xFF606060),
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: valueMaxLines,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

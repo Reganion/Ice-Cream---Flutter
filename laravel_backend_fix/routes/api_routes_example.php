@@ -6,6 +6,7 @@
  * Admin notification routes: protect with your admin auth middleware (e.g. auth:sanctum + admin check).
  */
 
+use App\Http\Controllers\Api\ApiAdminChatController;
 use App\Http\Controllers\Api\ApiAdminNotificationController;
 use App\Http\Controllers\Api\ApiAuthController;
 use App\Http\Controllers\Api\ApiOrderController;
@@ -39,10 +40,17 @@ Route::middleware('api.customer')->group(function () {
     Route::get('/orders/{id}', [ApiOrderController::class, 'show']);
 });
 
-// Admin notifications (protect with admin middleware in your app, e.g. Route::middleware(['auth:sanctum', 'admin']))
+// Admin (protect with admin middleware in your app, e.g. Route::middleware(['auth:sanctum', 'admin']))
 Route::prefix('admin')->group(function () {
+    // Admin notifications
     Route::get('/notifications', [ApiAdminNotificationController::class, 'index']);
     Route::get('/notifications/unread-count', [ApiAdminNotificationController::class, 'unreadCount']);
     Route::post('/notifications/{id}/read', [ApiAdminNotificationController::class, 'markRead']);
     Route::post('/notifications/read-all', [ApiAdminNotificationController::class, 'markAllRead']);
+
+    // Admin chat with customers
+    Route::get('/chat/customers', [ApiAdminChatController::class, 'customers']);
+    Route::get('/chat/customers/{customer_id}/messages', [ApiAdminChatController::class, 'messages']);
+    Route::post('/chat/customers/{customer_id}/messages', [ApiAdminChatController::class, 'store']);
+    Route::post('/chat/customers/{customer_id}/read', [ApiAdminChatController::class, 'markRead']);
 });

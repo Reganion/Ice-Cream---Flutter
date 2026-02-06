@@ -91,3 +91,24 @@ Protect these with your admin auth middleware (e.g. `auth:sanctum` + admin role 
 - `POST /admin/notifications/read-all` – mark all as read
 
 See `routes/api_routes_example.php` for the route definitions. Copy the `AdminNotification` model, migration, and `ApiAdminNotificationController` into your main Laravel app, run the migration, and ensure your existing `ApiOrderController::store` calls `AdminNotification::notifyNewOrder($order)` after creating the order (the version in this folder already does).
+
+---
+
+## Admin chat with customers
+
+Admin can view and reply to customer chat messages.
+
+### What was added
+
+- **Controller:** `App\Http\Controllers\Api\ApiAdminChatController` – list customers with chats, get/send messages, mark as read.
+
+### Admin chat API routes (add to your `routes/api.php` under prefix `v1`)
+
+Protect these with your admin auth middleware (e.g. `auth:sanctum` + admin role check):
+
+- `GET  /admin/chat/customers` – list customers with conversations (`?page=1&per_page=20`), includes last message and unread count
+- `GET  /admin/chat/customers/{customer_id}/messages` – get messages with a customer (`?page=1&per_page=50`)
+- `POST /admin/chat/customers/{customer_id}/messages` – send message (body, optional image file)
+- `POST /admin/chat/customers/{customer_id}/read` – mark customer's messages as read
+
+Requires existing `ChatMessage` model and `Customer::chatMessages()` relationship.

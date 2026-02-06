@@ -1,7 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/favorite/favorite.dart';
 import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/messages/messages.dart';
+import 'package:ice_cream/client/order/deliverTracker.dart';
+import 'package:ice_cream/client/order/menu.dart';
+import 'package:ice_cream/client/order/order_record.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
 class OrderHistoryPage extends StatefulWidget {
@@ -14,6 +21,67 @@ class OrderHistoryPage extends StatefulWidget {
 class _OrderHistoryPageState extends State<OrderHistoryPage> {
   int selectedTab = 0;
   final tabs = ["All", "Completed", "Processing", "Cancelled"];
+  List<OrderRecord> _orders = [];
+  bool _loading = true;
+  String? _error;
+
+  static const List<String> _statusQuery = ['all', 'completed', 'processing', 'cancelled'];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchOrders();
+  }
+
+  Future<void> _fetchOrders() async {
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Please log in to view order history.';
+          _orders = [];
+        });
+      }
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final status = _statusQuery[selectedTab.clamp(0, 3)];
+    final uri = Uri.parse('${Auth.apiBaseUrl}/orders').replace(queryParameters: {'status': status});
+    try {
+      final res = await http.get(
+        uri,
+        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+      );
+      if (!mounted) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode != 200) {
+        setState(() {
+          _loading = false;
+          _error = body?['message'] as String? ?? 'Could not load orders.';
+          _orders = [];
+        });
+        return;
+      }
+      final list = body?['data'] as List<dynamic>? ?? [];
+      setState(() {
+        _orders = list.map((e) => OrderRecord.fromJson(e as Map<String, dynamic>)).toList();
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Connection error. Please try again.';
+          _orders = [];
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +132,10 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
 
                     return Expanded(
                       child: GestureDetector(
-                        onTap: () => setState(() => selectedTab = index),
+                        onTap: () {
+                          setState(() => selectedTab = index);
+                          _fetchOrders();
+                        },
                         child: Container(
                           decoration: BoxDecoration(
                             color: isActive ? activeColor : Colors.transparent,
@@ -91,10 +162,29 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
             ),
             const SizedBox(height: 10),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Column(children: getOrderCards()),
-              ),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFFE3001B)))
+                  : _error != null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF5B5B5B))),
+                                const SizedBox(height: 16),
+                                TextButton(
+                                  onPressed: _fetchOrders,
+                                  child: const Text('Retry'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          child: Column(children: getOrderCards()),
+                        ),
             ),
           ],
         ),
@@ -104,387 +194,106 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
 
   /// ---------------- GET ORDER CARDS PER TAB ----------------
   List<Widget> getOrderCards() {
-    switch (selectedTab) {
-      case 1: // Completed
-        return [
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true, // only for Completed
+    if (_orders.isEmpty) {
+      return [
+        const Padding(
+          padding: EdgeInsets.only(top: 48),
+          child: Text(
+            'No orders in this tab.',
+            style: TextStyle(color: Color(0xFF5B5B5B), fontSize: 14),
           ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/vn.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true, // only for Completed
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/vn.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            rateColor: const Color(0xFFFFD900),
-            isCompletedTab: true,
-          ),
-        ];
-      case 2: // Processing
-        return [
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/vn.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-            isProcessingTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isProcessingTab: true,
-          ),
-        ];
-      case 3: // Cancelled
-        return [
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-            isCancelledTab: true,
-          ),
-        ];
-      default: // All
-        return [
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-          orderCard(
-            img: "lib/client/order/images/mg.png",
-            name: "Mango Graham",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-          orderCard(
-            img: "lib/client/order/images/ub.png",
-            name: "Ube Cheese",
-            size: "2 gal",
-            price: "₱200",
-            qty: "2",
-          ),
-          orderCard(
-            img: "lib/client/order/images/cc.png",
-            name: "Cookies & Cream",
-            size: "4 gal",
-            price: "₱300",
-            qty: "1",
-          ),
-        ];
+        ),
+      ];
     }
+    return _orders
+        .map((order) => orderCard(
+              order: order,
+              isCompletedTab: selectedTab == 1 || (selectedTab == 0 && order.isCompleted),
+              isProcessingTab: selectedTab == 2 || (selectedTab == 0 && order.isProcessing),
+              isCancelledTab: selectedTab == 3 || (selectedTab == 0 && order.isCancelled),
+              onOrderCancelled: _fetchOrders,
+            ))
+        .toList();
   }
 
   /// ---------------- ORDER CARD ----------------
   Widget orderCard({
-    required String img,
-    required String name,
-    required String size,
-    required String price,
-    required String qty,
-    Color? rateColor,
+    required OrderRecord order,
     bool isCompletedTab = false,
-    bool isProcessingTab = false, // new flag for Processing
+    bool isProcessingTab = false,
     bool isCancelledTab = false,
+    VoidCallback? onOrderCancelled,
   }) {
-    // Determine left button text and style
+    final name = order.productName;
+    final size = order.gallonSize;
+    final price = order.amountFormatted;
+    final qty = order.quantity.toString();
+    final imgUrl = order.productImageUrl;
+    final isNetworkImage = imgUrl.startsWith('http');
+    const placeholderAsset = 'lib/client/order/images/mg.png';
+
     String leftText;
     Color leftBgColor;
     Color leftTextColor;
-    Color leftBorderColor = Colors.transparent; // defa
+    Color leftBorderColor = Colors.transparent;
 
-    // Determine right button text and style
     bool showRightBtn = true;
     String rightText = "Buy Again";
     Color rightColor = const Color(0xFFF2F2F2);
     Color rightTextColor = Colors.black87;
 
     if (isCompletedTab) {
-      // Completed tab → Rate button
       leftText = "Rate";
-      leftBgColor = rateColor ?? const Color(0xFFFFD900);
+      leftBgColor = const Color(0xFFFFD900);
       leftTextColor = Colors.black;
-
       rightText = "Buy Again";
       rightColor = const Color(0xFFF2F2F2);
       rightTextColor = Colors.black87;
       showRightBtn = true;
     } else if (isProcessingTab) {
-      // Processing tab → Cancel + Track Order
       leftText = "Cancel";
       leftBgColor = Colors.white;
       leftTextColor = const Color(0xFFE3001B);
       leftBorderColor = const Color(0xFFE3001B);
-
       rightText = "Track Order";
       rightColor = const Color(0xFF007CFF);
       rightTextColor = Colors.white;
       showRightBtn = true;
     } else if (isCancelledTab) {
-      // Cancelled tab → Details + Buy Again
       leftText = "Details";
       leftBgColor = const Color(0xFFF2F2F2);
       leftTextColor = Colors.black87;
-
       rightText = "Buy Again";
       rightColor = const Color(0xFF007CFF);
-      rightTextColor = Color(0xFFFFFFFF);
+      rightTextColor = const Color(0xFFFFFFFF);
       showRightBtn = true;
     } else {
-      // Default All tab
-      leftText = name == "Ube Cheese"
-          ? "Cancel"
-          : name == "Cookies & Cream"
-          ? "Details"
-          : "Rate";
-
-      leftBgColor = name == "Ube Cheese"
-          ? const Color(0xFFFCE8E9)
-          : name == "Cookies & Cream"
-          ? const Color(0xFFF2F2F2)
-          : (rateColor ?? const Color(0xFFE3001B));
-
-      leftTextColor = name == "Ube Cheese"
-          ? const Color(0xFFE3001B)
-          : name == "Cookies & Cream"
-          ? Colors.black87
-          : Colors.white;
-
-      // Add border only for "Cancel" in All tab
-      if (selectedTab == 0 && leftText == "Cancel") {
+      if (order.isProcessing) {
+        leftText = "Cancel";
+        leftBgColor = const Color(0xFFFCE8E9);
+        leftTextColor = const Color(0xFFE3001B);
         leftBorderColor = const Color(0xFFE3001B);
-      }
-
-      // Right button logic
-      if (selectedTab == 0 && name == "Ube Cheese") {
-        showRightBtn = false; // hide "Buy Again" for Ube Cheese in All tab
+        showRightBtn = true;
+        rightText = "Track Order";
+        rightColor = const Color(0xFF007CFF);
+        rightTextColor = Colors.white;
+      } else if (order.isCancelled) {
+        leftText = "Details";
+        leftBgColor = const Color(0xFFF2F2F2);
+        leftTextColor = Colors.black87;
+        rightText = "Buy Again";
+        rightColor = const Color(0xFF007CFF);
+        rightTextColor = const Color(0xFFFFFFFF);
+        showRightBtn = true;
       } else {
+        leftText = "Rate";
+        leftBgColor = const Color(0xFFFFD900);
+        leftTextColor = Colors.black;
+        rightText = "Buy Again";
+        rightColor = const Color(0xFFF2F2F2);
+        rightTextColor = Colors.black87;
         showRightBtn = true;
       }
-
-      rightText = "Buy Again";
-      rightColor = name == "Cookies & Cream"
-          ? const Color(0xFF007CFF)
-          : const Color(0xFFF2F2F2);
-      rightTextColor = name == "Cookies & Cream"
-          ? Colors.white
-          : Colors.black87;
     }
 
     return Container(
@@ -507,7 +316,15 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.asset(img, width: 60, height: 60, fit: BoxFit.cover),
+            child: isNetworkImage
+                ? Image.network(
+                    imgUrl,
+                    width: 60,
+                    height: 60,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Image.asset(placeholderAsset, width: 60, height: 60, fit: BoxFit.cover),
+                  )
+                : Image.asset(placeholderAsset, width: 60, height: 60, fit: BoxFit.cover),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -564,23 +381,31 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                         GestureDetector(
                           onTap: () {
                             if (isProcessingTab && leftText == "Cancel") {
-                              showCancelOrderDialog(context);
+                              showCancelOrderDialog(
+                                context,
+                                orderId: order.id,
+                                productName: order.productName,
+                                onCancelled: onOrderCancelled,
+                              );
                               return;
                             }
-
                             if (leftText == "Rate") {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => RateOrderPage(
-                                    imageAsset: img,
+                                    orderId: order.id,
+                                    imageAsset: imgUrl,
                                     itemName: name,
-                                    status: 'Delivered',
+                                    status: order.status == 'walk_in' ? 'Walk-in' : 'Delivered',
                                     price: price,
-                                    dateTimeLabel: 'Today, 12:30 PM',
+                                    dateTimeLabel: order.createdAtFormatted ?? '—',
                                   ),
                                 ),
-                              );
+                              ).then((_) => _fetchOrders());
+                            }
+                            if (leftText == "Details") {
+                              // Optional: navigate to order detail screen if you add one
                             }
                           },
                           child: Container(
@@ -606,23 +431,42 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                             ),
                           ),
                         ),
-
                         if (showRightBtn) ...[
                           const SizedBox(width: 5),
-                          Container(
-                            height: 32,
-                            width: 90,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(10),
-                              color: rightColor,
-                            ),
-                            child: Center(
-                              child: Text(
-                                rightText,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 11.96,
-                                  color: rightTextColor,
+                          GestureDetector(
+                            onTap: () {
+                              if (rightText == "Track Order") {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => DeliveryTrackerPage(order: order),
+                                  ),
+                                );
+                              }
+                              if (rightText == "Buy Again") {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const MenuPage(),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Container(
+                              height: 32,
+                              width: 90,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                color: rightColor,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  rightText,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 11.96,
+                                    color: rightTextColor,
+                                  ),
                                 ),
                               ),
                             ),
@@ -701,6 +545,7 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
 class RateOrderPage extends StatefulWidget {
   const RateOrderPage({
     super.key,
+    required this.orderId,
     required this.imageAsset,
     required this.itemName,
     required this.price,
@@ -708,6 +553,7 @@ class RateOrderPage extends StatefulWidget {
     this.dateTimeLabel = 'Today, 12:30 PM',
   });
 
+  final int orderId;
   final String imageAsset;
   final String itemName;
   final String price;
@@ -785,12 +631,25 @@ class _RateOrderPageState extends State<RateOrderPage> {
                               padding: const EdgeInsets.only(left: 20),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(999),
-                                child: Image.asset(
-                                  widget.imageAsset,
-                                  width: 54,
-                                  height: 54,
-                                  fit: BoxFit.cover,
-                                ),
+                                child: widget.imageAsset.startsWith('http')
+                                    ? Image.network(
+                                        widget.imageAsset,
+                                        width: 54,
+                                        height: 54,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Image.asset(
+                                          'lib/client/order/images/mg.png',
+                                          width: 54,
+                                          height: 54,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      )
+                                    : Image.asset(
+                                        widget.imageAsset,
+                                        width: 54,
+                                        height: 54,
+                                        fit: BoxFit.cover,
+                                      ),
                               ),
                             ),
                             const SizedBox(width: 20),
@@ -952,12 +811,35 @@ class _RateOrderPageState extends State<RateOrderPage> {
             width: double.infinity,
             height: 56,
             child: ElevatedButton(
-              onPressed: () {
-                // TODO: Submit rating/message if needed.
-                Navigator.pop(context);
-              },
+              onPressed: _rating == 0
+                  ? null
+                  : () async {
+                      final token = await Auth.getToken();
+                      if (token == null) {
+                        Navigator.pop(context);
+                        return;
+                      }
+                      try {
+                        await http.post(
+                          Uri.parse('${Auth.apiBaseUrl}/orders/${widget.orderId}/feedback'),
+                          headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer $token',
+                          },
+                          body: jsonEncode({
+                            'rating': _rating,
+                            'message': _messageController.text.trim().isEmpty ? null : _messageController.text.trim(),
+                          }),
+                        );
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (_) {
+                        if (context.mounted) Navigator.pop(context);
+                      }
+                    },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFE3001B),
+                disabledBackgroundColor: Colors.grey.shade300,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(999),
                 ),
@@ -1032,8 +914,15 @@ class _BottomIcon extends StatelessWidget {
   }
 }
 
-Future<void> showCancelOrderDialog(BuildContext context) {
+Future<void> showCancelOrderDialog(
+  BuildContext context, {
+  required int orderId,
+  String? productName,
+  VoidCallback? onCancelled,
+}) {
   final otherReasonController = TextEditingController();
+  // Use page context for success dialog and refresh after dialog is closed
+  final parentContext = context;
 
   return showDialog(
     context: context,
@@ -1166,6 +1055,7 @@ Future<void> showCancelOrderDialog(BuildContext context) {
                             child: TextField(
                               controller: otherReasonController,
                               maxLines: 4,
+                              onChanged: (_) => setState(() {}),
                               decoration: const InputDecoration(
                                 contentPadding: EdgeInsets.all(12),
                                 isCollapsed: true,
@@ -1314,64 +1204,137 @@ Future<void> showCancelOrderDialog(BuildContext context) {
                         yield const SizedBox(height: 10);
                       }),
 
-                     
-
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: 118.75,
-                            height: 43.43,
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(dialogContext),
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: Color(0xFF969696)),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                              child: const Text(
-                                "No, cancel",
-                                style: TextStyle(
-                                  fontSize: 14.26,
-                                  fontWeight: FontWeight.w400,
-                                  color: Color(0xFF434343),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          SizedBox(
-                            width: 118.75,
-                            height: 43.43,
-                            child: ElevatedButton(
-                              onPressed: () {
-                                Navigator.pop(dialogContext);
-                                showSuccessDialog(context);
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFE3001B),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                              child: const Center(
-                                child: Text(
-                                  "Yes, I'm sure",
-                                  softWrap: false,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.visible,
-                                  style: TextStyle(
-                                    fontSize: 14.26,
-                                    fontWeight: FontWeight.w400,
-                                    color: Colors.white,
+                      // Reason required: disable Confirm until a reason is selected (and "Others" has text)
+                      Builder(
+                        builder: (_) {
+                          final isOthers = selectedReason == 'Others (Please specify)';
+                          final otherText = otherReasonController.text.trim();
+                          final isReasonValid = selectedReason != null &&
+                              selectedReason!.isNotEmpty &&
+                              (!isOthers || otherText.isNotEmpty);
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 118.75,
+                                height: 43.43,
+                                child: OutlinedButton(
+                                  onPressed: () => Navigator.pop(dialogContext),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: Color(0xFF969696)),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    "No, cancel",
+                                    style: TextStyle(
+                                      fontSize: 14.26,
+                                      fontWeight: FontWeight.w400,
+                                      color: Color(0xFF434343),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ],
+                              const SizedBox(width: 12),
+                              SizedBox(
+                                width: 118.75,
+                                height: 43.43,
+                                child: ElevatedButton(
+                                  onPressed: isReasonValid
+                                      ? () async {
+                                          final reason = selectedReason;
+                                          final reasonDetail = otherReasonController.text.trim();
+                                          if (reason == null || reason.isEmpty) {
+                                            ScaffoldMessenger.of(parentContext).showSnackBar(
+                                              const SnackBar(
+                                                content: Text('Please select a reason for cancellation.'),
+                                                backgroundColor: Color(0xFFE3001B),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          if (reason == 'Others (Please specify)' && reasonDetail.isEmpty) {
+                                            ScaffoldMessenger.of(parentContext).showSnackBar(
+                                              const SnackBar(
+                                                content: Text('Please specify your reason.'),
+                                                backgroundColor: Color(0xFFE3001B),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          final token = await Auth.getToken();
+                                          if (token == null) return;
+                                          try {
+                                            final body = <String, dynamic>{
+                                              'reason': reason,
+                                            };
+                                            if (reason == 'Others (Please specify)' && reasonDetail.isNotEmpty) {
+                                              body['reason_detail'] = reasonDetail;
+                                            }
+                                            final res = await http.patch(
+                                              Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/cancel'),
+                                              headers: {
+                                                'Accept': 'application/json',
+                                                'Content-Type': 'application/json',
+                                                'Authorization': 'Bearer $token',
+                                              },
+                                              body: jsonEncode(body),
+                                            );
+                                            if (!parentContext.mounted) return;
+                                            if (res.statusCode == 200) {
+                                              Navigator.pop(dialogContext);
+                                              onCancelled?.call();
+                                              showSuccessDialog(parentContext, productName: productName);
+                                            } else {
+                                              final data = jsonDecode(res.body) as Map<String, dynamic>?;
+                                              ScaffoldMessenger.of(parentContext).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    data?['message'] as String? ?? 'Failed to cancel order.',
+                                                  ),
+                                                  backgroundColor: const Color(0xFFE3001B),
+                                                ),
+                                              );
+                                            }
+                                          } catch (_) {
+                                            if (parentContext.mounted) {
+                                              ScaffoldMessenger.of(parentContext).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Connection error. Please try again.'),
+                                                  backgroundColor: Color(0xFFE3001B),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        }
+                                      : null,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFE3001B),
+                                    disabledBackgroundColor: Colors.grey.shade300,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                  child: const Center(
+                                    child: Text(
+                                      "Yes, I'm sure",
+                                      softWrap: false,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.visible,
+                                      style: TextStyle(
+                                        fontSize: 14.26,
+                                        fontWeight: FontWeight.w400,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -1385,10 +1348,10 @@ Future<void> showCancelOrderDialog(BuildContext context) {
   ).whenComplete(otherReasonController.dispose);
 }
 
-Future<void> showSuccessDialog(BuildContext context) {
+Future<void> showSuccessDialog(BuildContext context, {String? productName}) {
   return showDialog(
     context: context,
-    barrierDismissible: true, // allow dismiss by tapping outside
+    barrierDismissible: true,
     builder: (context) {
       return Dialog(
         shape: RoundedRectangleBorder(
@@ -1399,40 +1362,48 @@ Future<void> showSuccessDialog(BuildContext context) {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-
             children: [
               const SizedBox(height: 10),
-              // Success icon (check circle, green)
               Icon(
                 Symbols.check_circle,
-                size: 44, // matches previous container size
+                size: 44,
                 color: Color(0xFF22B345),
                 fill: 1,
                 weight: 400,
                 grade: 0,
                 opticalSize: 24,
               ),
-
               const SizedBox(height: 8),
-
               const Text(
-                "Successfully Cancel",
+                "Order Cancelled",
                 style: TextStyle(fontSize: 19.85, fontWeight: FontWeight.bold),
               ),
-
               const SizedBox(height: 8),
-
-              const Text(
-                "Your order has been successfully cancel",
+              Text(
+                productName != null && productName.isNotEmpty
+                    ? "Your order ($productName) has been successfully cancelled."
+                    : "Your order has been successfully cancelled.",
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 13.23,
                   color: Color(0xFF5B5B5B),
                   fontWeight: FontWeight.w400,
                 ),
               ),
-
-              const SizedBox(height: 10),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF22B345),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text("OK"),
+                ),
+              ),
             ],
           ),
         ),
