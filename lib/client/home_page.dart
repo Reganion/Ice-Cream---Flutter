@@ -58,30 +58,15 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _searchController = TextEditingController();
   String searchText = "";
 
-  /// Fallback flavor list when API has not loaded or fails.
-  final List<Map<String, String>> _fallbackFlavors = [
-    {"title": "Cookies & Cream", "img": "lib/client/images/home_page/CC.png"},
-    {"title": "Strawberry", "img": "lib/client/images/home_page/SB.png"},
-    {"title": "Vanilla", "img": "lib/client/images/home_page/SB.png"},
-    {"title": "Chocolate", "img": "lib/client/images/home_page/CC.png"},
-  ];
-
-  /// Flavors to display: from API if loaded, else fallback. Filtered by search.
+  /// Flavors to display from API only, filtered by search.
   List<Map<String, dynamic>> get _flavorsForDisplay {
-    final list = _flavors;
-    if (list == null || list.isEmpty) {
-      return _fallbackFlavors
-          .map((e) => {"title": e["title"]!, "img": e["img"]!, "imageUrl": null as String?, "priceDisplay": null as String?})
-          .toList();
-    }
-    return list
+    return (_flavors ?? <Map<String, dynamic>>[])
         .where((item) =>
             (item["name"] as String? ?? "")
                 .toLowerCase()
                 .contains(searchText.toLowerCase()))
         .map((e) => {
               "title": e["name"] as String? ?? "",
-              "img": "",
               "imageUrl": _imageUrl((e["mobile_image"] ?? e["image"]) as String?),
               "priceDisplay": _formatPrice(e["price"]),
             })
@@ -95,47 +80,11 @@ class _HomePageState extends State<HomePage> {
     return path.startsWith('http') ? path : '$base/$path';
   }
 
-  final List<String> topImages = [
-    "lib/client/images/home_page/sb.jpg",
-    "lib/client/images/home_page/cc.jpg",
-    "lib/client/images/home_page/pandan.jpg",
-  ];
+  /// Item count for top (Best Sellers) carousel from API only.
+  int get _topCarouselItemCount => _bestSellers?.length ?? 0;
 
-  final List<String> topNames = [
-    "Strawberry Flavor",
-    "Vanilla Flavor",
-    "Mango Graham Flavor",
-  ];
-
-  /// Different rating for each top image (aligned with topNames). Used when API best-sellers not loaded.
-  final List<String> topRatings = ["4.8", "4.9", "5.0"];
-
-  /// Item count for top (Best Sellers) carousel: API data or fallback.
-  int get _topCarouselItemCount =>
-      (_bestSellers?.isNotEmpty == true) ? _bestSellers!.length : topImages.length;
-
-  /// Item count for Popular carousel: API data or fallback.
-  int get _popularCarouselItemCount =>
-      (_popular?.isNotEmpty == true) ? _popular!.length : manualSlideNames.length;
-
-  /// Manual slideshow below Popular (same style as top, no auto-slide).
-  final List<String> manualSlideImages = [
-    "lib/client/images/home_page/cc.jpg",
-    "lib/client/images/home_page/MIC.png",
-    "lib/client/images/home_page/sb.jpg",
-  ];
-  final List<String> manualSlideNames = [
-    "Matcha",
-    "Strawberry ",
-    "Ube Cheese",
-  ];
-  final List<String> manualSlidePrices = [
-    "₱1,700",
-    "₱1,500",
-    "₱1,900",
-  ];
-  /// Map Popular slide index -> menu item index (for tap-to-open).
-  static const List<int> manualSlideToMenuIndex = [0, 0, 7]; // Matcha, Strawberry, Ube Cheese
+  /// Item count for Popular carousel from API only.
+  int get _popularCarouselItemCount => _popular?.length ?? 0;
   final PageController _manualSlideController = PageController();
 
   /// Fetch best-sellers, popular, and flavors from API (public endpoints).
@@ -200,6 +149,19 @@ class _HomePageState extends State<HomePage> {
     if (price == null) return '₱0';
     if (price is num) return '₱${NumberFormat('#,##0').format(price)}';
     return '₱${price.toString()}';
+  }
+
+  Widget _imagePlaceholder({double? width, double? height}) {
+    return Container(
+      width: width,
+      height: height,
+      color: const Color(0xFFF3F3F3),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.image_not_supported_outlined,
+        color: Color(0xFFB0B0B0),
+      ),
+    );
   }
 
   /// Fetches cart count (sum of quantities) from API for the cart icon badge.
@@ -561,9 +523,7 @@ class _HomePageState extends State<HomePage> {
                           return GestureDetector(
                             onTap: () {
                               if (count == 0) return;
-                              final flavorName = useBestSellers
-                                  ? (_bestSellers![currentPage.clamp(0, count - 1)]["name"] as String? ?? "")
-                                  : (currentPage < topNames.length ? topNames[currentPage] : topNames.first);
+                              final flavorName = _bestSellers![currentPage.clamp(0, count - 1)]["name"] as String? ?? "";
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -600,40 +560,20 @@ class _HomePageState extends State<HomePage> {
                                                 const BouncingScrollPhysics(),
                                             itemCount: count,
                                             itemBuilder: (context, i) {
-                                              if (useBestSellers) {
-                                                final imgUrl = _imageUrl((_bestSellers![i]["mobile_image"] ?? _bestSellers![i]["image"]) as String?);
-                                                return Padding(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 5),
-                                                  child: ClipRRect(
-                                                    borderRadius: BorderRadius.circular(14),
-                                                    child: imgUrl.isEmpty
-                                                        ? Image.asset(
-                                                            topImages[i < topImages.length ? i : 0],
-                                                            width: width,
-                                                            fit: BoxFit.cover,
-                                                          )
-                                                        : Image.network(
-                                                            imgUrl,
-                                                            width: width,
-                                                            fit: BoxFit.cover,
-                                                            errorBuilder: (_, __, ___) => Image.asset(
-                                                              topImages[i < topImages.length ? i : 0],
-                                                              width: width,
-                                                              fit: BoxFit.cover,
-                                                            ),
-                                                          ),
-                                                  ),
-                                                );
-                                              }
+                                              if (!useBestSellers) return const SizedBox.shrink();
+                                              final imgUrl = _imageUrl((_bestSellers![i]["mobile_image"] ?? _bestSellers![i]["image"]) as String?);
                                               return Padding(
                                                 padding: const EdgeInsets.symmetric(horizontal: 5),
                                                 child: ClipRRect(
                                                   borderRadius: BorderRadius.circular(14),
-                                                  child: Image.asset(
-                                                    topImages[i],
-                                                    width: width,
-                                                    fit: BoxFit.cover,
-                                                  ),
+                                                  child: imgUrl.isEmpty
+                                                      ? _imagePlaceholder(width: width)
+                                                      : Image.network(
+                                                          imgUrl,
+                                                          width: width,
+                                                          fit: BoxFit.cover,
+                                                          errorBuilder: (_, __, ___) => _imagePlaceholder(width: width),
+                                                        ),
                                                 ),
                                               );
                                             },
@@ -650,12 +590,10 @@ class _HomePageState extends State<HomePage> {
                                     animation: _pageController,
                                     builder: (context, _) {
                                       final page = _topImagesCurrentPage;
-                                      final name = useBestSellers
+                                      final name = useBestSellers && count > 0
                                           ? (_bestSellers![page.clamp(0, count - 1)]["name"] as String? ?? "")
-                                          : (page < topNames.length ? topNames[page] : topNames.first);
-                                      final rating = useBestSellers
-                                          ? "5.0"
-                                          : (page < topRatings.length ? topRatings[page] : topRatings.first);
+                                          : "";
+                                      const rating = "5.0";
                                       return Row(
                                         mainAxisAlignment:
                                             MainAxisAlignment.spaceBetween,
@@ -754,20 +692,13 @@ class _HomePageState extends State<HomePage> {
                             GestureDetector(
                               onTap: () {
                                 final page = _manualSlideCurrentPage;
-                                final usePopular = _popular?.isNotEmpty == true;
                                 final count = _popularCarouselItemCount;
                                 if (count == 0) return;
-                                final name = usePopular
-                                    ? (_popular![page.clamp(0, count - 1)]["name"] as String? ?? "")
-                                    : (page < manualSlideNames.length ? manualSlideNames[page] : manualSlideNames.first);
-                                final itemIndex = !usePopular && page < manualSlideToMenuIndex.length
-                                    ? manualSlideToMenuIndex[page]
-                                    : null;
+                                final name = _popular![page.clamp(0, count - 1)]["name"] as String? ?? "";
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
                                     builder: (context) => MenuPage(
-                                      initialItemIndex: itemIndex,
                                       initialDisplayName: name,
                                       initialFlavorName: name,
                                     ),
@@ -795,41 +726,20 @@ class _HomePageState extends State<HomePage> {
                                       physics: const BouncingScrollPhysics(),
                                       itemCount: _popularCarouselItemCount,
                                       itemBuilder: (context, i) {
-                                        final usePopular = _popular?.isNotEmpty == true;
-                                        if (usePopular) {
-                                          final imgUrl = _imageUrl((_popular![i]["mobile_image"] ?? _popular![i]["image"]) as String?);
-                                          return Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 5),
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(9),
-                                              child: imgUrl.isEmpty
-                                                  ? Image.asset(
-                                                      manualSlideImages[i < manualSlideImages.length ? i : 0],
-                                                      width: width,
-                                                      fit: BoxFit.cover,
-                                                    )
-                                                  : Image.network(
-                                                      imgUrl,
-                                                      width: width,
-                                                      fit: BoxFit.cover,
-                                                      errorBuilder: (_, __, ___) => Image.asset(
-                                                        manualSlideImages[i < manualSlideImages.length ? i : 0],
-                                                        width: width,
-                                                        fit: BoxFit.cover,
-                                                      ),
-                                                    ),
-                                            ),
-                                          );
-                                        }
+                                        if (_popular == null || _popular!.isEmpty) return const SizedBox.shrink();
+                                        final imgUrl = _imageUrl((_popular![i]["mobile_image"] ?? _popular![i]["image"]) as String?);
                                         return Padding(
                                           padding: const EdgeInsets.symmetric(horizontal: 5),
                                           child: ClipRRect(
                                             borderRadius: BorderRadius.circular(9),
-                                            child: Image.asset(
-                                              manualSlideImages[i],
-                                              width: width,
-                                              fit: BoxFit.cover,
-                                            ),
+                                            child: imgUrl.isEmpty
+                                                ? _imagePlaceholder(width: width)
+                                                : Image.network(
+                                                    imgUrl,
+                                                    width: width,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, __, ___) => _imagePlaceholder(width: width),
+                                                  ),
                                           ),
                                         );
                                       },
@@ -853,24 +763,20 @@ class _HomePageState extends State<HomePage> {
                                 final count = _popularCarouselItemCount;
                                 final name = usePopular && count > 0
                                     ? (_popular![page.clamp(0, count - 1)]["name"] as String? ?? "")
-                                    : (page < manualSlideNames.length ? manualSlideNames[page] : manualSlideNames.first);
+                                    : "";
                                 final price = usePopular && count > 0
                                     ? _formatPrice(_popular![page.clamp(0, count - 1)]["price"])
-                                    : (page < manualSlidePrices.length ? manualSlidePrices[page] : manualSlidePrices.isNotEmpty ? manualSlidePrices.first : "₱1,700");
+                                    : "₱0";
                                 return GestureDetector(
                                   onTap: () {
                                     final p = _manualSlideCurrentPage;
                                     final slideName = usePopular && count > 0
                                         ? (_popular![p.clamp(0, count - 1)]["name"] as String? ?? "")
-                                        : (p < manualSlideNames.length ? manualSlideNames[p] : manualSlideNames.first);
-                                    final itemIdx = !usePopular && p < manualSlideToMenuIndex.length
-                                        ? manualSlideToMenuIndex[p]
-                                        : null;
+                                        : "";
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => MenuPage(
-                                          initialItemIndex: itemIdx,
                                           initialDisplayName: slideName,
                                           initialFlavorName: slideName,
                                         ),
@@ -1013,7 +919,6 @@ class _HomePageState extends State<HomePage> {
                                       ]
                                     : _flavorsForDisplay.map((item) {
                                         final title = item["title"] as String;
-                                        final img = item["img"] as String? ?? "";
                                         final imageUrl = item["imageUrl"] as String?;
                                         final priceStr = item["priceDisplay"] as String?;
                                         return Padding(
@@ -1022,7 +927,7 @@ class _HomePageState extends State<HomePage> {
                                           ),
                                           child: _flavorCard(
                                             title,
-                                            img,
+                                            "",
                                             imageUrl: imageUrl,
                                             priceDisplay: priceStr,
                                             width: 149,
@@ -1059,12 +964,11 @@ class _HomePageState extends State<HomePage> {
                             itemBuilder: (context, index) {
                               final item = _flavorsForDisplay[index];
                               final title = item["title"] as String;
-                              final img = item["img"] as String? ?? "";
                               final imageUrl = item["imageUrl"] as String?;
                               final priceStr = item["priceDisplay"] as String?;
                               return _flavorCard(
                                 title,
-                                img,
+                                "",
                                 imageUrl: imageUrl,
                                 priceDisplay: priceStr,
                                 onTap: () {
@@ -1129,18 +1033,14 @@ class _HomePageState extends State<HomePage> {
                       height: width * 0.41,
                       width: double.infinity,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Image.asset(
-                        img.isEmpty ? "lib/client/images/home_page/CC.png" : img,
-                        height: width * 0.41,
+                      errorBuilder: (_, __, ___) => _imagePlaceholder(
                         width: double.infinity,
-                        fit: BoxFit.cover,
+                        height: width * 0.41,
                       ),
                     )
-                  : Image.asset(
-                      img.isEmpty ? "lib/client/images/home_page/CC.png" : img,
-                      height: width * 0.41,
+                  : _imagePlaceholder(
                       width: double.infinity,
-                      fit: BoxFit.cover,
+                      height: width * 0.41,
                     ),
             ),
           ),

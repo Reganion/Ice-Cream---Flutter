@@ -47,3 +47,4 @@ app.*.map.json
 # Secrets and local tooling
 **/serviceAccount.json
 delete-users/node_modules/
+node_modules

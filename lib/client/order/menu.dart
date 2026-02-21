@@ -248,10 +248,10 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
     return '₱${NumberFormat('#,##0').format(n)}';
   }
 
-  /// Items to display: from API flavors when loaded, else fallback. Each item has name, price, image, big_image, category, isNetworkImage, id (when from API).
+  /// Items to display from API only.
   List<Map<String, dynamic>> get items {
     final api = _apiFlavors;
-    if (api == null || api.isEmpty) return _fallbackItems;
+    if (api == null || api.isEmpty) return <Map<String, dynamic>>[];
     return api.map((e) {
       final name = e["name"] as String? ?? "";
       final priceRaw = e["price"];
@@ -265,14 +265,25 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
       final map = <String, dynamic>{
         "name": name,
         "price": price,
-        "image": image.isEmpty ? "lib/client/order/images/sb.png" : image,
-        "big_image": image.isEmpty ? "lib/client/order/images/sbB.png" : image,
+        "image": image,
+        "big_image": image,
         "category": category,
-        "isNetworkImage": image.isNotEmpty,
+        "isNetworkImage": image.isNotEmpty && image.startsWith('http'),
       };
       if (id != null) map["id"] = id is int ? id : int.tryParse(id.toString());
       return map;
     }).toList();
+  }
+
+  Widget _imagePlaceholder() {
+    return Container(
+      color: const Color(0xFFF3F3F3),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.image_not_supported_outlined,
+        color: Color(0xFFB0B0B0),
+      ),
+    );
   }
 
   /// Whether the currently selected flavor is in the user's favorites (from API).
@@ -475,6 +486,7 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
   }
 
   void _applyInitialSelection() {
+    if (items.isEmpty) return;
     if (widget.initialItemIndex != null) {
       final idx = widget.initialItemIndex!.clamp(0, items.length - 1);
       setState(() => selectedItem = items[idx]);
@@ -563,86 +575,6 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
       if (selectedItem != null) _checkFavorite();
     });
   }
-
-  static final List<Map<String, dynamic>> _fallbackItems = [
-    {
-      "name": "Strawberry",
-      "price": 12.99,
-      "image": "lib/client/order/images/sb.png", // small image for grid
-      "big_image": "lib/client/order/images/sbB.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Vanilla",
-      "price": 52.99,
-      "image": "lib/client/order/images/ub.png",
-      "big_image": "lib/client/order/images/ub.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Strawberry",
-      "price": 65.99,
-      "image": "lib/client/favorite/images/sb.png",
-      "big_image": "lib/client/order/images/sbB.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Vanilla",
-      "price": 12.99,
-      "image": "lib/client/order/images/ub.png",
-      "big_image": "lib/client/order/images/ub.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Strawberry",
-      "price": 12.99,
-      "image": "lib/client/favorite/images/sb.png",
-      "big_image": "lib/client/order/images/sbB.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Vanilla",
-      "price": 12.99,
-      "image": "lib/client/order/images/ub.png",
-      "big_image": "lib/client/order/images/ub.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Strawberry",
-      "price": 12.99,
-      "image": "lib/client/favorite/images/sb.png",
-      "big_image": "lib/client/order/images/sbB.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Vanilla",
-      "price": 12.99,
-      "image": "lib/client/order/images/ub.png",
-      "big_image": "lib/client/order/images/ub.png", // big image for top
-      "category": "Plain Flavors",
-    },
-    {
-      "name": "Ube Cheese",
-      "price": 12.99,
-      "image": "lib/client/order/images/cc.png",
-      "big_image": "lib/client/order/images/cc.png", // big image for top
-      "category": "Special Flavors",
-    },
-    {
-      "name": "Mango Graham",
-      "price": 12.99,
-      "image": "lib/client/order/images/mg.png",
-      "big_image": "lib/client/order/images/mg.png", // big image for top
-      "category": "Special Flavors",
-    },
-    {
-      "name": "Buko Pandan",
-      "price": 15.99,
-      "image": "lib/client/order/images/vn.png",
-      "big_image": "lib/client/order/images/vn.png", // big image for top
-      "category": "Toppings",
-    },
-  ];
 
   static const List<String> _fallbackGallonSizes = [
     "2 gal",
@@ -986,19 +918,15 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
                               padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(12),
-                                child: item["isNetworkImage"] == true
+                                child: item["isNetworkImage"] == true &&
+                                        (item["image"] as String).isNotEmpty
                                     ? Image.network(
                                         item["image"] as String,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => Image.asset(
-                                          "lib/client/order/images/sb.png",
-                                          fit: BoxFit.cover,
-                                        ),
+                                        errorBuilder: (_, __, ___) =>
+                                            _imagePlaceholder(),
                                       )
-                                    : Image.asset(
-                                        item["image"] as String,
-                                        fit: BoxFit.cover,
-                                      ),
+                                    : _imagePlaceholder(),
                               ),
                             ),
                           ),

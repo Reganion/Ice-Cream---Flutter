@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Laravel API base URL (includes /api/v1).
-const String _apiBaseUrl = 'http://10.49.86.86:8000/api/v1';
+const String _apiBaseUrl = 'http://10.123.114.86:8000/api/v1';
 
 const String _tokenKey = 'auth_token';
 const String _customerCacheKey = 'auth_customer_cache';

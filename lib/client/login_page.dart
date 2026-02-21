@@ -4,6 +4,10 @@ import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/forgot_password.dart';
 import 'create_page.dart'; // or the correct file path
 import 'home_page.dart'; // or the correct file path
+import 'package:google_sign_in/google_sign_in.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 
 enum SuffixIconType { clear, visibility }
 
@@ -61,9 +65,65 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Future<void> _signInWithGoogle() async {
-    // Google Sign-In disabled; UI only.
+final GoogleSignIn _googleSignIn = GoogleSignIn(
+  scopes: ['email'],
+  serverClientId: '718217481412-14icq5ololcndgbmecjaqiat1l4425n9.apps.googleusercontent.com',
+);
+
+Future<void> _signInWithGoogle() async {
+  setState(() => _isGoogleLoading = true);
+
+  try {
+    final GoogleSignInAccount? googleUser =
+        await _googleSignIn.signIn();
+
+    if (googleUser == null) {
+      setState(() => _isGoogleLoading = false);
+      return;
+    }
+
+    final GoogleSignInAuthentication googleAuth =
+        await googleUser.authentication;
+
+    final String? idToken = googleAuth.idToken;
+
+    if (idToken == null) {
+      throw Exception("Failed to get ID Token");
+    }
+
+    // Send token to Laravel backend
+    final response = await http.post(
+     Uri.parse("${Auth.apiBaseUrl}/google-login"),
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: jsonEncode({
+        "id_token": idToken,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 && data['success'] == true) {
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomePage()),
+      );
+    } else {
+      throw Exception(data['message'] ?? "Google login failed");
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.toString())),
+    );
+  } finally {
+    setState(() => _isGoogleLoading = false);
   }
+}
+
 
   @override
   Widget build(BuildContext context) {
