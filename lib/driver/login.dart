@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/forgot_password.dart';
 import 'package:ice_cream/driver/shipments.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Define the shared input background for both inputs and the page.
 const Color _inputBgColor = Colors.white; // <- use any matching color if needed
@@ -40,6 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _obscure = true;
+  bool _isLoading = false;
   String? _emailErrorText;
   String? _passwordErrorText;
 
@@ -50,10 +56,110 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  OutlineInputBorder _border() => OutlineInputBorder(
-    borderRadius: BorderRadius.circular(18),
-    borderSide: const BorderSide(color: Colors.white, width: 1.2),
-  );
+  Future<void> _handleLogin() async {
+    final email = _emailCtrl.text.trim();
+    final password = _passCtrl.text.trim();
+
+    final emailEmpty = email.isEmpty;
+    final passEmpty = password.isEmpty;
+
+    setState(() {
+      if (emailEmpty && passEmpty) {
+        _emailErrorText = 'This field is required.';
+        _passwordErrorText = 'This field is required.';
+      } else if (!emailEmpty && passEmpty) {
+        _emailErrorText = null;
+        _passwordErrorText = 'Please enter your password';
+      } else if (emailEmpty && !passEmpty) {
+        _emailErrorText = 'Please enter your email address';
+        _passwordErrorText = null;
+      } else {
+        _emailErrorText = null;
+        _passwordErrorText = null;
+      }
+    });
+
+    if (emailEmpty || passEmpty) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/login');
+      final res = await http.post(
+        uri,
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(<String, String>{
+          'email': email,
+          'password': password,
+        }),
+      );
+
+      Map<String, dynamic> data = <String, dynamic>{};
+      try {
+        data = jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+
+      if (res.statusCode == 200 && (data['success'] == true)) {
+        final token = data['token'] as String?;
+        final driver = data['driver'] as Map<String, dynamic>?;
+
+        if (token != null && token.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('driver_token', token);
+          if (driver != null) {
+            await prefs.setString('driver_profile', jsonEncode(driver));
+          }
+        }
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const ShipmentsPage(),
+          ),
+        );
+        return;
+      }
+
+      // Validation errors
+      if (res.statusCode == 422 && data['errors'] is Map<String, dynamic>) {
+        final errors = data['errors'] as Map<String, dynamic>;
+        setState(() {
+          final emailErrors = errors['email'];
+          if (emailErrors is List && emailErrors.isNotEmpty) {
+            _emailErrorText = emailErrors.first.toString();
+          }
+          final passErrors = errors['password'];
+          if (passErrors is List && passErrors.isNotEmpty) {
+            _passwordErrorText = passErrors.first.toString();
+          }
+        });
+        return;
+      }
+
+      final msg = (data['message'] as String?) ??
+          'Login failed. Please check your email and password.';
+      setState(() {
+        _passwordErrorText = msg;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not connect to server. Please check your connection.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -246,51 +352,26 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         shadowColor: Colors.transparent,
                       ),
-                      onPressed: () {
-                        final emailEmpty = _emailCtrl.text.trim().isEmpty;
-                        final passEmpty = _passCtrl.text.trim().isEmpty;
-
-                        setState(() {
-                          // ✅ both empty
-                          if (emailEmpty && passEmpty) {
-                            _emailErrorText = 'This field is required.';
-                            _passwordErrorText = 'This field is required.';
-                          }
-                          // ✅ email has value, password empty
-                          else if (!emailEmpty && passEmpty) {
-                            _emailErrorText = null;
-                            _passwordErrorText = 'Please enter your password';
-                          }
-                          // ✅ password has value, email empty
-                          else if (emailEmpty && !passEmpty) {
-                            _emailErrorText = 'Please enter your email address';
-                            _passwordErrorText = null;
-                          }
-                          // ✅ both have value
-                          else {
-                            _emailErrorText = null;
-                            _passwordErrorText = null;
-                          }
-                        });
-
-                        if (!emailEmpty && !passEmpty) {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const ShipmentsPage(),
+                      onPressed: _isLoading ? null : _handleLogin,
+                      child: _isLoading
+                          ? const SizedBox(
+                              height: 22,
+                              width: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.3,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            )
+                          : const Text(
+                              'Login',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w400,
+                              ),
                             ),
-                          );
-                        }
-                      },
-
-                      child: const Text(
-                        'Login',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
                     ),
                   ),
 

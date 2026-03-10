@@ -1,9 +1,126 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/login.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
+
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  bool _loading = true;
+  int _totalDelivered = 0;
+  Map<String, dynamic> _driver = <String, dynamic>{};
+
+  String get _name => (_driver['name'] ?? '').toString().trim();
+  String get _phone => (_driver['phone'] ?? '').toString().trim();
+  String get _email => (_driver['email'] ?? '').toString().trim();
+  String get _licenseNo => (_driver['license_no'] ?? '').toString().trim();
+  String get _licenseType => (_driver['license_type'] ?? '').toString().trim();
+  String? get _imageUrl {
+    final v = _driver['image_url'] ?? _driver['image'];
+    if (v == null) return null;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfileData();
+  }
+
+  Future<void> _loadProfileData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('driver_token');
+      final cached = prefs.getString('driver_profile');
+
+      if (cached != null && cached.isNotEmpty) {
+        try {
+          final map = jsonDecode(cached) as Map<String, dynamic>;
+          if (mounted) setState(() => _driver = map);
+        } catch (_) {}
+      }
+
+      if (token == null || token.isEmpty) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+
+      final responses = await Future.wait([
+        http.get(
+          Uri.parse('${Auth.apiBaseUrl}/driver/me'),
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        ),
+        http.get(
+          Uri.parse('${Auth.apiBaseUrl}/driver/shipments').replace(
+            queryParameters: {'tab': 'completed'},
+          ),
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        ),
+      ]);
+
+      final meRes = responses[0];
+      final completedRes = responses[1];
+      if (!mounted) return;
+
+      if (meRes.statusCode == 200) {
+        final meData = jsonDecode(meRes.body) as Map<String, dynamic>;
+        final driver = meData['driver'];
+        if (driver is Map<String, dynamic>) {
+          _driver = driver;
+          await prefs.setString('driver_profile', jsonEncode(driver));
+        }
+      }
+
+      if (completedRes.statusCode == 200) {
+        final shipData = jsonDecode(completedRes.body) as Map<String, dynamic>;
+        final count = shipData['count'];
+        _totalDelivered = count is num ? count.toInt() : 0;
+      }
+
+      setState(() => _loading = false);
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token');
+    if (token != null && token.isNotEmpty) {
+      try {
+        await http.post(
+          Uri.parse('${Auth.apiBaseUrl}/driver/logout'),
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+      } catch (_) {}
+    }
+    await prefs.remove('driver_token');
+    await prefs.remove('driver_profile');
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,45 +194,63 @@ class ProfilePage extends StatelessWidget {
                         color: Color(0xFFFFE0E0),
                       ),
                       clipBehavior: Clip.antiAlias,
-                      child: Image.asset(
-                        "lib/driver/profile/images/kyley.png",
-                        width: 69,
-                        height: 69,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return const SizedBox(
-                            width: 69,
-                            height: 69,
-                            child: Icon(
-                              Icons.person,
-                              size: 32,
-                              color: Color(0xFFE30613),
+                      child: _imageUrl != null && _imageUrl!.startsWith('http')
+                          ? Image.network(
+                              _imageUrl!,
+                              width: 69,
+                              height: 69,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return const SizedBox(
+                                  width: 69,
+                                  height: 69,
+                                  child: Icon(
+                                    Icons.person,
+                                    size: 32,
+                                    color: Color(0xFFE30613),
+                                  ),
+                                );
+                              },
+                            )
+                          : Image.asset(
+                              "lib/driver/profile/images/kyley.png",
+                              width: 69,
+                              height: 69,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return const SizedBox(
+                                  width: 69,
+                                  height: 69,
+                                  child: Icon(
+                                    Icons.person,
+                                    size: 32,
+                                    color: Color(0xFFE30613),
+                                  ),
+                                );
+                              },
                             ),
-                          );
-                        },
-                      ),
                     ),
                   ),
 
                   // name + phone
-                  const Positioned(
+                  Positioned(
                     left: 110,
                     top: 90,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Kyley Reganion",
-                          style: TextStyle(
+                          _name.isNotEmpty ? _name : "H&R Driver",
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 19,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
-                        SizedBox(height: 4),
+                        const SizedBox(height: 4),
                         Text(
-                          "+63 9123456789",
-                          style: TextStyle(
+                          _phone.isNotEmpty ? _phone : "—",
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
                             fontWeight: FontWeight.w400,
@@ -133,6 +268,15 @@ class ProfilePage extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
                 children: [
+                  if (_loading)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: LinearProgressIndicator(
+                        minHeight: 3,
+                        color: red,
+                        backgroundColor: Color(0xFFF2F2F2),
+                      ),
+                    ),
                   // stats row – one card with divider in the middle
                   Container(
                     height: 82,
@@ -169,7 +313,7 @@ class ProfilePage extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  "100",
+                                  "$_totalDelivered",
                                   style: TextStyle(
                                     color: red,
                                     fontSize: 19,
@@ -206,7 +350,7 @@ class ProfilePage extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  "289 Hrs",
+                                  "--",
                                   style: TextStyle(
                                     color: red,
                                     fontSize: 19,
@@ -243,15 +387,15 @@ class ProfilePage extends StatelessWidget {
                       children: [
                         _InfoRow(
                           label: "Phone Number",
-                          value: "09123456789",
+                          value: _phone.isNotEmpty ? _phone : "—",
                           trailingText: "Change",
                           showDivider: true,
                           onTap: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute<void>(
-                                builder: (context) => const EditPhoneNumberPage(
-                                  initialPhone: "09123456789",
+                                builder: (context) => EditPhoneNumberPage(
+                                  initialPhone: _phone,
                                 ),
                               ),
                             );
@@ -259,15 +403,15 @@ class ProfilePage extends StatelessWidget {
                         ),
                         _InfoRow(
                           label: "Email",
-                          value: "kylereganion@gmail.com",
+                          value: _email.isNotEmpty ? _email : "—",
                           trailingText: "Change",
                           showDivider: true,
                           onTap: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute<void>(
-                                builder: (context) => const EditEmailAddressPage(
-                                  initialEmail: "kylereganion@gmail.com",
+                                builder: (context) => EditEmailAddressPage(
+                                  initialEmail: _email,
                                 ),
                               ),
                             );
@@ -275,13 +419,13 @@ class ProfilePage extends StatelessWidget {
                         ),
                         _InfoRow(
                           label: "License No:",
-                          value: "N03-12-123456",
+                          value: _licenseNo.isNotEmpty ? _licenseNo : "—",
                           trailingText: null,
                           showDivider: true,
                         ),
                         _InfoRow(
                           label: "License Type:",
-                          value: "Professional",
+                          value: _licenseType.isNotEmpty ? _licenseType : "—",
                           trailingText: null,
                           showDivider: false,
                         ),
@@ -303,12 +447,7 @@ class ProfilePage extends StatelessWidget {
                         backgroundColor: Colors.white,
                       ),
                       onPressed: () {
-                        Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(
-                            builder: (context) => const LoginScreen(),
-                          ),
-                          (route) => false,
-                        );
+                        _logout();
                       },
                       child: const Text(
                         "Log out",

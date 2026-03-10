@@ -1,8 +1,12 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cd_success.dart';
 
@@ -10,7 +14,14 @@ import 'cd_success.dart';
 /// Matches design: delivery overview, customer & order, received amount,
 /// payment method (GCash / Cash), Take Photo + image display, Submit button.
 class CompleteDeliveryPhotoPage extends StatefulWidget {
-  const CompleteDeliveryPhotoPage({super.key});
+  final int? shipmentId;
+  final Map<String, dynamic>? initialShipment;
+
+  const CompleteDeliveryPhotoPage({
+    super.key,
+    this.shipmentId,
+    this.initialShipment,
+  });
 
   @override
   State<CompleteDeliveryPhotoPage> createState() =>
@@ -23,7 +34,89 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
   int _selectedPaymentMethod = -1; // -1 = none, 0 = GCash, 1 = Cash
   bool _hasPhoto = false;
   String? _photoPath;
+  bool _loading = true;
+  String _error = '';
+  Map<String, dynamic>? _shipment;
   final ImagePicker _picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    _shipment = widget.initialShipment;
+    _loadShipment();
+  }
+
+  int? get _shipmentId {
+    final fromWidget = widget.shipmentId;
+    if (fromWidget != null) return fromWidget;
+    final id = _shipment?['id'];
+    if (id is int) return id;
+    return int.tryParse(id?.toString() ?? '');
+  }
+
+  String _fmtMoney(dynamic value) {
+    if (value == null) return '₱0';
+    final s = value.toString();
+    if (s.toUpperCase().startsWith('PHP ')) return '₱${s.substring(4)}';
+    final n = value is num ? value.toDouble() : double.tryParse(s);
+    if (n == null) return s;
+    return '₱${n.toStringAsFixed(n.truncateToDouble() == n ? 0 : 2)}';
+  }
+
+  Future<String?> _token() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('driver_token');
+  }
+
+  Future<void> _loadShipment() async {
+    final id = _shipmentId;
+    if (id == null) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Shipment ID is missing.';
+      });
+      return;
+    }
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = 'Missing driver session. Please login again.';
+        });
+        return;
+      }
+      final res = await http.get(
+        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$id'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      if (res.statusCode == 200 && data['success'] == true && data['shipment'] is Map) {
+        setState(() {
+          _shipment = Map<String, dynamic>.from(data['shipment'] as Map);
+          _loading = false;
+          _error = '';
+        });
+      } else {
+        setState(() {
+          _loading = false;
+          _error = (data['message'] ?? 'Could not load shipment.').toString();
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Could not load shipment. Check connection.';
+      });
+    }
+  }
 
   Future<void> _takePhoto() async {
     final file = await _picker.pickImage(
@@ -88,14 +181,42 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            if (_error.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _error,
+                  style: const TextStyle(
+                    color: Color(0xFFE3001B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             // Delivery date, Time, Delivered time
             Row(
               children: [
-                _buildLabelValue('21 Nov 2025', 'Delivery date'),
+                _buildLabelValue(
+                  (_shipment?['expected_on'] ?? '—').toString(),
+                  'Delivery date',
+                ),
                 const SizedBox(width: 16),
-                _buildLabelValue('12:30 PM', 'Time'),
+                _buildLabelValue(
+                  (_shipment?['expected_time'] ?? _shipment?['time'] ?? '—')
+                      .toString(),
+                  'Time',
+                ),
                 const SizedBox(width: 16),
-                _buildLabelValue('12:00 NN', 'Delivered time'),
+                _buildLabelValue(
+                  (_shipment?['delivered_time'] ?? '—').toString(),
+                  'Delivered time',
+                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -124,15 +245,18 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                       Expanded(
                         flex: 2,
                         child: _buildLabelValueColumn(
-                          '#32456124',
+                          (_shipment?['transaction_label'] ??
+                                  _shipment?['transaction_id'] ??
+                                  '—')
+                              .toString(),
                           'Transaction ID',
                         ),
                       ),
                       Expanded(
-                        child: _buildLabelValueColumn('30 km', 'Distance'),
+                        child: _buildLabelValueColumn('—', 'Distance'),
                       ),
                       Expanded(
-                        child: _buildLabelValueColumn('20 min', 'Travel time'),
+                        child: _buildLabelValueColumn('—', 'Travel time'),
                       ),
                     ],
                   ),
@@ -150,9 +274,9 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                 fontWeight: FontWeight.w400,
               ),
             ),
-            const Text(
-              'kyle Reganion',
-              style: TextStyle(
+            Text(
+              (_shipment?['customer_name'] ?? '—').toString(),
+              style: const TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF1C1B1F),
@@ -167,9 +291,10 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                 fontWeight: FontWeight.w400,
               ),
             ),
-            const Text(
-              'ACLC College of Mandaue, Briones St., Maguikay, Mandaue City, Cebu',
-              style: TextStyle(
+            Text(
+              (_shipment?['delivery_address'] ?? _shipment?['location'] ?? '—')
+                  .toString(),
+              style: const TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF1C1B1F),
@@ -187,14 +312,33 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildOrderRow('Quantity:', '1'),
-                  _buildOrderRow('Size:', '2 Gal'),
-                  _buildOrderRow('Order:', 'Strawberry'),
-                  _buildOrderRow('Order Type:', 'Special Flavor'),
-                  _buildOrderRow('Cost:', '₱1,900'),
-                  _buildOrderRow('Down Payment:', '₱500'),
-                  _buildOrderRow('Balance:', '₱1,400'),
-                  _buildOrderRow('Customer Number:', '09123456789'),
+                  _buildOrderRow(
+                    'Quantity:',
+                    (_shipment?['quantity'] ?? '1').toString(),
+                  ),
+                  _buildOrderRow(
+                    'Size:',
+                    (_shipment?['size'] ?? '—').toString(),
+                  ),
+                  _buildOrderRow(
+                    'Order:',
+                    (_shipment?['order_name'] ?? _shipment?['product_name'] ?? '—')
+                        .toString(),
+                  ),
+                  _buildOrderRow(
+                    'Order Type:',
+                    (_shipment?['order_type'] ?? '—').toString(),
+                  ),
+                  _buildOrderRow(
+                    'Cost:',
+                    _fmtMoney(_shipment?['cost_text'] ?? _shipment?['cost']),
+                  ),
+                  _buildOrderRow('Down Payment:', '—'),
+                  _buildOrderRow('Balance:', '—'),
+                  _buildOrderRow(
+                    'Customer Number:',
+                    (_shipment?['customer_phone'] ?? '—').toString(),
+                  ),
                 ],
               ),
             ),

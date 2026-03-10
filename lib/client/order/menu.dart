@@ -1551,7 +1551,7 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
                     ),
                   ),
                   Text(
-                    "1 Item",
+                    "$qty Item${qty == 1 ? "" : "s"}",
                     style: const TextStyle(fontSize: 14, color: Color(0xFF505050)),
                   ),
                 ],
@@ -1806,22 +1806,6 @@ class _MenuPageState extends State<MenuPage> with TickerProviderStateMixin {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget buildStrawberryItem() {
-    return buildCheckoutOrderRow(
-      gallonImageUrl: selectedGallonImageUrl,
-      flavorImage: selectedItem?["image"] as String? ?? "lib/client/favorite/images/sb.png",
-      isFlavorNetwork: selectedItem?["isNetworkImage"] == true,
-      flavorName: selectedItem?["name"] as String? ?? "Strawberry",
-      category: selectedItem?["category"] as String? ?? "Special Flavors",
-      size: selectedSize.isEmpty ? "2 gal" : selectedSize,
-      quantity: quantity == 0 ? 1 : quantity,
-      priceDisplay: _formatPrice(
-        ((selectedItem?["price"] as num?) ?? 0) * (quantity == 0 ? 1 : quantity)
-            + selectedGallonAddonPrice * (quantity == 0 ? 1 : quantity),
       ),
     );
   }
@@ -2686,75 +2670,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
                         ),
                       ),
                     )
-                  :
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.asset(
-                            "lib/client/order/images/sb.png",
-                            width: 63,
-                            height: 63,
-                            fit: BoxFit.cover,
-                          ),
+                  : const Center(
+                      child: Text(
+                        "No items in your order.",
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF505050),
                         ),
-                        const SizedBox(width: 15),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Text(
-                                "Strawberry",
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1C1B1F),
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                "Special Flavor",
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF9D9D9D),
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                "₱1,700",
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFFE3001B),
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: const [
-                            Text(
-                              "x1",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF505050),
-                              ),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              "3.5 gal",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF505050),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
             ),
 

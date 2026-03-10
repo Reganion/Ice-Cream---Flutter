@@ -1,9 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/delivery/confirm_delivery.dart';
 import 'package:ice_cream/driver/delivery/view_details.dart';
 import 'package:ice_cream/driver/message/messages.dart';
 import 'package:ice_cream/driver/profile/profile.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -40,6 +45,157 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
 
   int _selectedTabIndex = 0; // 0 = Incoming, 1 = Accepted, 2 = Completed
   int _bottomNavIndex = 0; // 0 = Shipments, 1 = Messages, 2 = Profile
+
+  String _driverName = '';
+  String _driverPhone = '';
+  String? _driverImageUrl;
+  final TextEditingController _searchCtrl = TextEditingController();
+  bool _loadingShipments = false;
+  String _shipmentsError = '';
+  List<Map<String, dynamic>> _shipments = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDriverProfile();
+    _fetchShipments();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  String get _activeTab {
+    if (_selectedTabIndex == 1) return 'accepted';
+    if (_selectedTabIndex == 2) return 'completed';
+    return 'incoming';
+  }
+
+  String _displayAmount(Map<String, dynamic> map) {
+    final raw = (map['amount_text'] ?? '').toString().trim();
+    if (raw.toUpperCase().startsWith('PHP ')) {
+      return '₱${raw.substring(4)}';
+    }
+    final amount = map['amount'];
+    if (amount is num) return '₱${amount.toStringAsFixed(0)}';
+    return raw.isNotEmpty ? raw : '₱0';
+  }
+
+  Color _hexToColor(String? hex, Color fallback) {
+    if (hex == null || hex.isEmpty) return fallback;
+    final cleaned = hex.replaceAll('#', '').trim();
+    if (cleaned.length != 6) return fallback;
+    final value = int.tryParse('FF$cleaned', radix: 16);
+    return value != null ? Color(value) : fallback;
+  }
+
+  Future<void> _loadDriverProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final json = prefs.getString('driver_profile');
+      if (json == null || json.isEmpty) return;
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      setState(() {
+        _driverName = (data['name'] ?? '').toString();
+        _driverPhone = (data['phone'] ?? '').toString();
+        final img = data['image_url'] ?? data['image'];
+        _driverImageUrl = img != null ? img.toString() : null;
+      });
+      _fetchDriverProfileFromApi();
+    } catch (_) {
+      // ignore – fall back to placeholders
+    }
+  }
+
+  Future<void> _fetchDriverProfileFromApi() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('driver_token');
+      if (token == null || token.isEmpty) return;
+      final res = await http.get(
+        Uri.parse('${Auth.apiBaseUrl}/driver/me'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (res.statusCode != 200) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final driver = data['driver'];
+      if (driver is! Map<String, dynamic>) return;
+      await prefs.setString('driver_profile', jsonEncode(driver));
+      if (!mounted) return;
+      setState(() {
+        _driverName = (driver['name'] ?? '').toString();
+        _driverPhone = (driver['phone'] ?? '').toString();
+        final img = driver['image_url'] ?? driver['image'];
+        _driverImageUrl = img != null ? img.toString() : null;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _fetchShipments() async {
+    setState(() {
+      _loadingShipments = true;
+      _shipmentsError = '';
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('driver_token');
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _loadingShipments = false;
+          _shipmentsError = 'Missing driver session. Please login again.';
+          _shipments = [];
+        });
+        return;
+      }
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments').replace(
+        queryParameters: {
+          'tab': _activeTab,
+          if (_searchCtrl.text.trim().isNotEmpty) 'search': _searchCtrl.text.trim(),
+        },
+      );
+      final res = await http.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      if (res.statusCode == 200 && data['success'] == true) {
+        final raw = data['shipments'];
+        final list = raw is List
+            ? raw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : <Map<String, dynamic>>[];
+        setState(() {
+          _shipments = list;
+          _loadingShipments = false;
+        });
+      } else {
+        setState(() {
+          _loadingShipments = false;
+          _shipments = [];
+          _shipmentsError = (data['message'] ?? 'Could not load shipments.').toString();
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingShipments = false;
+        _shipments = [];
+        _shipmentsError = 'Could not load shipments. Check connection.';
+      });
+    }
+  }
 
   Widget _buildShipmentCard({
     required String transactionId,
@@ -279,14 +435,25 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                       color: Color(0xFFD9C1A7),
                     ),
                     child: ClipOval(
-                      child: Image.asset(
-                        "lib/driver/profile/images/kyley.png",
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(
-                          Icons.person,
-                          color: Colors.white,
-                        ),
-                      ),
+                      child: _driverImageUrl != null &&
+                              _driverImageUrl!.isNotEmpty &&
+                              _driverImageUrl!.startsWith('http')
+                          ? Image.network(
+                              _driverImageUrl!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.person,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Image.asset(
+                              "lib/driver/profile/images/kyley.png",
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.person,
+                                color: Colors.white,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -295,19 +462,21 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text(
-                          "Kyley Reganion",
-                          style: TextStyle(
+                          _driverName.isNotEmpty ? _driverName : "H&R Driver",
+                          style: const TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF1F1F1F),
                           ),
                         ),
-                        SizedBox(height: 2),
+                        const SizedBox(height: 2),
                         Text(
-                          "+63 9123456789",
-                          style: TextStyle(
+                          _driverPhone.isNotEmpty
+                              ? _driverPhone
+                              : "+63 ••• ••• ••••",
+                          style: const TextStyle(
                             fontSize: 14,
                             color: Color(0xFF1F1F1F),
                             fontWeight: FontWeight.w400,
@@ -367,6 +536,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                     const SizedBox(width: 26),
                     Expanded(
                       child: TextField(
+                        controller: _searchCtrl,
                         cursorColor: Colors.black,
                         cursorHeight: 18,
                         style: const TextStyle(
@@ -381,6 +551,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                           ),
                           border: InputBorder.none,
                         ),
+                        onChanged: (_) => _fetchShipments(),
                       ),
                     ),
                   ],
@@ -405,19 +576,28 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                       label: "Incoming",
                       selected: _selectedTabIndex == 0,
                       selectedColor: kRed,
-                      onTap: () => setState(() => _selectedTabIndex = 0),
+                      onTap: () {
+                        setState(() => _selectedTabIndex = 0);
+                        _fetchShipments();
+                      },
                     ),
                     _SegmentChip(
                       label: "Accepted",
                       selected: _selectedTabIndex == 1,
                       selectedColor: kRed,
-                      onTap: () => setState(() => _selectedTabIndex = 1),
+                      onTap: () {
+                        setState(() => _selectedTabIndex = 1);
+                        _fetchShipments();
+                      },
                     ),
                     _SegmentChip(
                       label: "Completed",
                       selected: _selectedTabIndex == 2,
                       selectedColor: kRed,
-                      onTap: () => setState(() => _selectedTabIndex = 2),
+                      onTap: () {
+                        setState(() => _selectedTabIndex = 2);
+                        _fetchShipments();
+                      },
                     ),
                   ],
                 ),
@@ -428,121 +608,96 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                    if (_selectedTabIndex == 0) ...[
-                      _buildShipmentCard(
-                        transactionId: "#32456124",
-                        badge: "New",
-                        badgeColor: kBlue,
-                        productName: "Strawberry",
-                        price: "₱1,900",
-                        expectedOn: "21 Nov, 12:30 PM",
-                        location: "ACLC College",
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ConfirmDeliveryPage(),
+                    if (_loadingShipments)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else if (_shipmentsError.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        child: Text(
+                          _shipmentsError,
+                          style: const TextStyle(
+                            color: Color(0xFFE3001B),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      )
+                    else if (_shipments.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        child: Text(
+                          'No shipments found.',
+                          style: TextStyle(
+                            color: Color(0xFF505050),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      )
+                    else
+                      ..._shipments.asMap().entries.map((entry) {
+                        final shipment = entry.value;
+                        final isCompleted = _selectedTabIndex == 2;
+                        final badgeColor = _hexToColor(
+                          shipment['badge_color']?.toString(),
+                          _selectedTabIndex == 1
+                              ? const Color(0xFFFF6805)
+                              : (_selectedTabIndex == 2 ? const Color(0xFF00AE2A) : kBlue),
+                        );
+                        return Column(
+                          children: [
+                            _buildShipmentCard(
+                              transactionId: (shipment['transaction_label'] ??
+                                      shipment['transaction_id'] ??
+                                      '—')
+                                  .toString(),
+                              badge: (shipment['badge'] ?? 'New').toString(),
+                              badgeColor: badgeColor,
+                              productName: (shipment['product_name'] ?? '—').toString(),
+                              price: _displayAmount(shipment),
+                              expectedOn: (shipment['expected_on'] ?? '—').toString(),
+                              location: (shipment['location'] ?? '—').toString(),
+                              showViewDetailsButton: isCompleted,
+                              showBadge: !isCompleted,
+                              onTap: isCompleted
+                                  ? null
+                                  : () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => ConfirmDeliveryPage(
+                                            showDeliverNowOnly: _selectedTabIndex == 1,
+                                            shipmentId: shipment['id'] is int
+                                                ? shipment['id'] as int
+                                                : int.tryParse(shipment['id']?.toString() ?? ''),
+                                            initialShipment: shipment,
+                                          ),
+                                        ),
+                                      ).then((_) => _fetchShipments());
+                                    },
+                              onViewDetails: !isCompleted
+                                  ? null
+                                  : () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => DeliveryViewDetailsPage(
+                                            shipmentId: shipment['id'] is int
+                                                ? shipment['id'] as int
+                                                : int.tryParse(shipment['id']?.toString() ?? ''),
+                                            initialShipment: shipment,
+                                          ),
+                                        ),
+                                      );
+                                    },
                             ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _buildShipmentCard(
-                        transactionId: "#32456124",
-                        badge: "New",
-                        badgeColor: kBlue,
-                        productName: "Strawberry",
-                        price: "₱1,900",
-                        expectedOn: "21 Nov, 12:30 PM",
-                        location: "ACLC College",
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ConfirmDeliveryPage(),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _buildShipmentCard(
-                        transactionId: "#32456131",
-                        badge: "New",
-                        badgeColor: kBlue,
-                        productName: "Ube Cheese",
-                        price: "₱2,300",
-                        expectedOn: "23 Nov, 9:00 AM",
-                        location: "Cebu Doctors University",
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ConfirmDeliveryPage(),
-                            ),
-                          );
-                        },
-                      ),
-                    ] else if (_selectedTabIndex == 1) ...[
-                      _buildShipmentCard(
-                        transactionId: "#32456189",
-                        badge: "Pending",
-                        badgeColor: const Color(0xFFFF6805),
-                        productName: "Chocolate",
-                        price: "₱2,100",
-                        expectedOn: "22 Nov, 2:00 PM",
-                        location: "University of Cebu",
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ConfirmDeliveryPage(
-                                showDeliverNowOnly: true,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ] else ...[
-                      _buildShipmentCard(
-                        transactionId: "#32456001",
-                        badge: "Completed",
-                        badgeColor: const Color(0xFF00AE2A),
-                        productName: "Vanilla",
-                        price: "₱1,500",
-                        expectedOn: "20 Nov, 10:00 AM",
-                        location: "SM City Cebu",
-                        showViewDetailsButton: true,
-                        showBadge: false,
-                        onViewDetails: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const DeliveryViewDetailsPage(),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _buildShipmentCard(
-                        transactionId: "#32455987",
-                        badge: "Completed",
-                        badgeColor: const Color(0xFF00AE2A),
-                        productName: "Cookies & Cream",
-                        price: "₱2,200",
-                        expectedOn: "19 Nov, 4:30 PM",
-                        location: "Ayala Center Cebu",
-                        showViewDetailsButton: true,
-                        showBadge: false,
-                        onViewDetails: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const DeliveryViewDetailsPage(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
+                            if (entry.key < _shipments.length - 1) const SizedBox(height: 10),
+                          ],
+                        );
+                      }),
                     const SizedBox(height: 16),
                     SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
                   ],

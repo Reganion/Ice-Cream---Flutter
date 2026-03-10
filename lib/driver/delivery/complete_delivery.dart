@@ -1,9 +1,21 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/delivery/cd_photo.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CompleteDeliveryPage extends StatefulWidget {
-  const CompleteDeliveryPage({super.key});
+  final int? shipmentId;
+  final Map<String, dynamic>? initialShipment;
+
+  const CompleteDeliveryPage({
+    super.key,
+    this.shipmentId,
+    this.initialShipment,
+  });
 
   @override
   State<CompleteDeliveryPage> createState() => _CompleteDeliveryPageState();
@@ -13,11 +25,92 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
   bool _forceShowFullCard = false;
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
+  bool _loading = true;
+  bool _submitting = false;
+  String _error = '';
+  Map<String, dynamic>? _shipment;
 
   @override
   void initState() {
     super.initState();
+    _shipment = widget.initialShipment;
     _sheetController.addListener(_onSheetSizeChange);
+    _loadShipment();
+  }
+
+  int? get _shipmentId {
+    final fromWidget = widget.shipmentId;
+    if (fromWidget != null) return fromWidget;
+    final id = _shipment?['id'];
+    if (id is int) return id;
+    return int.tryParse(id?.toString() ?? '');
+  }
+
+  String _fmtMoney(dynamic value) {
+    if (value == null) return '₱0';
+    final s = value.toString();
+    if (s.toUpperCase().startsWith('PHP ')) return '₱${s.substring(4)}';
+    final n = value is num ? value.toDouble() : double.tryParse(s);
+    if (n == null) return s;
+    return '₱${n.toStringAsFixed(n.truncateToDouble() == n ? 0 : 2)}';
+  }
+
+  Future<String?> _token() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('driver_token');
+  }
+
+  Future<void> _loadShipment() async {
+    final id = _shipmentId;
+    if (id == null) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Shipment ID is missing.';
+      });
+      return;
+    }
+
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = 'Missing driver session. Please login again.';
+        });
+        return;
+      }
+
+      final res = await http.get(
+        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$id'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+
+      if (res.statusCode == 200 && data['success'] == true && data['shipment'] is Map) {
+        setState(() {
+          _shipment = Map<String, dynamic>.from(data['shipment'] as Map);
+          _loading = false;
+          _error = '';
+        });
+      } else {
+        setState(() {
+          _loading = false;
+          _error = (data['message'] ?? 'Could not load shipment.').toString();
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Could not load shipment. Check connection.';
+      });
+    }
   }
 
   void _onSheetSizeChange() {
@@ -59,9 +152,54 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
     await Navigator.push(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => const CompleteDeliveryPhotoPage(),
+        builder: (_) => CompleteDeliveryPhotoPage(
+          shipmentId: _shipmentId,
+          initialShipment: _shipment,
+        ),
       ),
     );
+  }
+
+  Future<bool> _postShipmentAction(String action) async {
+    final id = _shipmentId;
+    if (id == null || _submitting) return false;
+    setState(() => _submitting = true);
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Missing driver session. Please login again.')),
+          );
+        }
+        return false;
+      }
+      final res = await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$id/$action'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return false;
+      if (res.statusCode >= 200 && res.statusCode < 300 && data['success'] == true) {
+        return true;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text((data['message'] ?? 'Action failed.').toString())),
+      );
+      return false;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Action failed. Check your connection.')),
+        );
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -184,7 +322,8 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'ACLC College of Mandaue',
+                            (_shipment?['delivery_address'] ?? _shipment?['location'] ?? 'Shipment')
+                                .toString(),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis, // ✅ avoids overflow in narrow landscape
                             style: TextStyle(
@@ -195,7 +334,7 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                           ),
                           const SizedBox(height: 2), // ✅ tighter
                           Text(
-                            '30 km   20 min',
+                            _loading ? 'Loading...' : 'Shipment details',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -242,8 +381,26 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (_loading)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 20),
+                                child: Center(
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                            if (_error.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  _error,
+                                  style: const TextStyle(
+                                    color: Color(0xFFE3001B),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
                             Text(
-                              'Expected on: 21 Nov, 12:30 pm',
+                              'Expected on: ${(_shipment?['expected_on'] ?? '—').toString()}',
                       style: TextStyle(
                         fontSize: isCompact ? 21 : 23,
                         fontWeight: FontWeight.w700,
@@ -255,12 +412,15 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
 
                     // ✅ METRICS (EXACT: 3 columns in one row)
                     Row(
-                      children: const [
+                      children: [
                         Expanded(
                           flex: 2,
                           child: _CompleteMetricItem(
                             icon: Symbols.deployed_code,
-                            value: '#32456124',
+                            value: (_shipment?['transaction_label'] ??
+                                    _shipment?['transaction_id'] ??
+                                    '—')
+                                .toString(),
                             label: 'Transaction ID',
                             alignCenter: false,
                           ),
@@ -268,7 +428,7 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                         Expanded(
                           flex: 1,
                           child: _CompleteMetricItem(
-                            value: '30 km',
+                            value: '—',
                             label: 'Distance',
                             alignCenter: false,
                           ),
@@ -276,7 +436,7 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                         Expanded(
                           flex: 1,
                           child: _CompleteMetricItem(
-                            value: '20 min',
+                            value: '—',
                             label: 'Travel time',
                             alignCenter: false,
                           ),
@@ -304,7 +464,7 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                                 ),
                               ),
                               Text(
-                                'Pyang Generalao',
+                                (_shipment?['customer_name'] ?? '—').toString(),
                                 style: TextStyle(
                                   fontSize: isCompact ? 17 : 18,
                                   fontWeight: FontWeight.w600,
@@ -333,7 +493,8 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                     ),
 
                     Text(
-                      'ACLC College of Mandaue, Briones St., Maguikay, Mandaue City, Cebu',
+                      (_shipment?['delivery_address'] ?? _shipment?['location'] ?? '—')
+                          .toString(),
                       style: TextStyle(
                         fontSize: isCompact ? 17 : 18,
                         fontWeight: FontWeight.w600,
@@ -357,15 +518,36 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          _CompleteOrderRow(label: 'Quantity:', value: '1'),
-                          _CompleteOrderRow(label: 'Size:', value: '2 Gal'),
-                          _CompleteOrderRow(label: 'Order:', value: 'Strawberry'),
-                          _CompleteOrderRow(label: 'Order Type:', value: 'Special Flavor'),
-                          _CompleteOrderRow(label: 'Cost:', value: '₱1,900'),
-                          _CompleteOrderRow(label: 'Down Payment:', value: '₱500'),
-                          _CompleteOrderRow(label: 'Balance:', value: '₱1,400'),
-                          _CompleteOrderRow(label: 'Customer Number:', value: '09123456789'),
+                        children: [
+                          _CompleteOrderRow(
+                            label: 'Quantity:',
+                            value: (_shipment?['quantity'] ?? '1').toString(),
+                          ),
+                          _CompleteOrderRow(
+                            label: 'Size:',
+                            value: (_shipment?['size'] ?? '—').toString(),
+                          ),
+                          _CompleteOrderRow(
+                            label: 'Order:',
+                            value: (_shipment?['order_name'] ??
+                                    _shipment?['product_name'] ??
+                                    '—')
+                                .toString(),
+                          ),
+                          _CompleteOrderRow(
+                            label: 'Order Type:',
+                            value: (_shipment?['order_type'] ?? '—').toString(),
+                          ),
+                          _CompleteOrderRow(
+                            label: 'Cost:',
+                            value: _fmtMoney(_shipment?['cost_text'] ?? _shipment?['cost']),
+                          ),
+                          const _CompleteOrderRow(label: 'Down Payment:', value: '—'),
+                          const _CompleteOrderRow(label: 'Balance:', value: '—'),
+                          _CompleteOrderRow(
+                            label: 'Customer Number:',
+                            value: (_shipment?['customer_phone'] ?? '—').toString(),
+                          ),
                         ],
                       ),
                     ),
@@ -374,7 +556,13 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                               SizedBox(
                                 width: double.infinity,
                                 child: ElevatedButton(
-                                  onPressed: _openTakePhotoFlow,
+                                  onPressed: (_loading || _submitting)
+                                      ? null
+                                      : () async {
+                                          final ok = await _postShipmentAction('deliver');
+                                          if (!mounted || !ok) return;
+                                          await _openTakePhotoFlow();
+                                        },
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF00AE2A),
                                     foregroundColor: Colors.white,
