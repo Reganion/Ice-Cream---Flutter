@@ -1,5 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/login.dart';
+import 'package:ice_cream/driver/profile/profile_api_helpers.dart';
 
 class ForgotPasswordDPage extends StatefulWidget {
   const ForgotPasswordDPage({super.key});
@@ -11,6 +17,8 @@ class ForgotPasswordDPage extends StatefulWidget {
 class _ForgotPasswordDPageState extends State<ForgotPasswordDPage> {
   final TextEditingController emailController = TextEditingController();
   bool hasText = false;
+  bool _loading = false;
+  String? _errorText;
 
   @override
   void initState() {
@@ -22,6 +30,54 @@ class _ForgotPasswordDPageState extends State<ForgotPasswordDPage> {
         hasText = emailController.text.isNotEmpty;
       });
     });
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendForgotPasswordOtp() async {
+    final email = emailController.text.trim();
+    if (email.isEmpty) return;
+
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+
+    try {
+      final res = await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/forgot-password'),
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'email': email}),
+      );
+      final data = safeDecode(res.body);
+      if (res.statusCode == 200 && data['success'] == true) {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => OTPDcode(email: email)),
+        );
+        return;
+      }
+
+      setState(() {
+        _errorText = extractApiMessage(data);
+      });
+    } catch (_) {
+      setState(() {
+        _errorText = 'Could not connect to server. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   @override
@@ -113,20 +169,21 @@ class _ForgotPasswordDPageState extends State<ForgotPasswordDPage> {
                 ),
 
                 const SizedBox(height: 30),
+                if (_errorText != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _errorText!,
+                      style: const TextStyle(color: Colors.red, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 SizedBox(
                   width: double.infinity,
                   height: 55,
                   child: ElevatedButton(
-                    onPressed: hasText
-                        ? () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const OTPDcode(),
-                              ),
-                            );
-                          }
-                        : null, // disabled when hasText is false
+                    onPressed:
+                        (hasText && !_loading) ? _sendForgotPasswordOtp : null,
                     style: ButtonStyle(
                       backgroundColor: MaterialStateProperty.resolveWith<Color>(
                         (Set<MaterialState> states) {
@@ -143,9 +200,9 @@ class _ForgotPasswordDPageState extends State<ForgotPasswordDPage> {
                       ),
                       elevation: MaterialStateProperty.all(0),
                     ),
-                    child: const Text(
-                      "Continue",
-                      style: TextStyle(
+                    child: Text(
+                      _loading ? "Sending..." : "Continue",
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w400,
                         color: Colors.white,
@@ -163,7 +220,9 @@ class _ForgotPasswordDPageState extends State<ForgotPasswordDPage> {
 }
 
 class OTPDcode extends StatefulWidget {
-  const OTPDcode({super.key});
+  final String email;
+
+  const OTPDcode({super.key, required this.email});
 
   @override
   State<OTPDcode> createState() => _OTPDcodeState();
@@ -171,9 +230,128 @@ class OTPDcode extends StatefulWidget {
 
 class _OTPDcodeState extends State<OTPDcode> {
   List<String> otp = ["", "", "", ""]; // store OTP digits
+  bool _loading = false;
+  bool _resending = false;
+  String? _errorText;
+  int _resendSecondsLeft = 0;
+  Timer? _resendTimer;
 
   bool get isFilled =>
       otp.every((digit) => digit.isNotEmpty); // check if all boxes are filled
+
+  bool get _canResend => !_loading && !_resending && _resendSecondsLeft == 0;
+
+  String get _resendLabel {
+    if (_resending) return 'Resending...';
+    if (_resendSecondsLeft > 0) {
+      final mm = (_resendSecondsLeft ~/ 60).toString().padLeft(2, '0');
+      final ss = (_resendSecondsLeft % 60).toString().padLeft(2, '0');
+      return 'Resend OTP in $mm:$ss';
+    }
+    return 'Resend OTP';
+  }
+
+  void _startResendCooldown() {
+    _resendTimer?.cancel();
+    setState(() => _resendSecondsLeft = 60);
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_resendSecondsLeft <= 1) {
+        setState(() => _resendSecondsLeft = 0);
+        timer.cancel();
+      } else {
+        setState(() => _resendSecondsLeft--);
+      }
+    });
+  }
+
+  Future<void> _verifyOtp() async {
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/forgot-password/verify-otp'),
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'email': widget.email, 'otp': otp.join()}),
+      );
+      final data = safeDecode(res.body);
+      if (res.statusCode == 200 && data['success'] == true) {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ResetPasswordDPage(email: widget.email),
+          ),
+        );
+        return;
+      }
+      setState(() => _errorText = extractApiMessage(data));
+    } catch (_) {
+      setState(() {
+        _errorText = 'Could not connect to server. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _resendOtp() async {
+    setState(() => _resending = true);
+    try {
+      final res = await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/forgot-password/resend-otp'),
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'email': widget.email}),
+      );
+      final data = safeDecode(res.body);
+      if (res.statusCode == 200 && data['success'] == true) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              (data['message'] as String?) ?? 'A new OTP has been sent.',
+            ),
+          ),
+        );
+        _startResendCooldown();
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(extractApiMessage(data))),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not connect to server. Please try again.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _resending = false);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _resendTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -228,7 +406,7 @@ class _OTPDcodeState extends State<OTPDcode> {
                   ),
                   children: [
                     TextSpan(
-                      text: "example@gmail.com",
+                      text: "",
                       style: TextStyle(
                         fontSize: 15,
                         color: Color(0xFF1C1B1F),
@@ -238,6 +416,24 @@ class _OTPDcodeState extends State<OTPDcode> {
                   ],
                 ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                widget.email,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF1C1B1F),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (_errorText != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               const SizedBox(height: 50),
 
               /// OTP INPUT BOXES
@@ -257,16 +453,8 @@ class _OTPDcodeState extends State<OTPDcode> {
                 width: double.infinity,
                 height: 55,
                 child: ElevatedButton(
-                  onPressed: isFilled
-                      ? () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ResetPasswordDPage(),
-                            ),
-                          );
-                        }
-                      : null, // disable button when not filled
+                  onPressed:
+                      (isFilled && !_loading) ? _verifyOtp : null, // disable
                   style: ButtonStyle(
                     backgroundColor: MaterialStateProperty.resolveWith<Color>((
                       states,
@@ -283,9 +471,9 @@ class _OTPDcodeState extends State<OTPDcode> {
                     ),
                     elevation: MaterialStateProperty.all(0),
                   ),
-                  child: const Text(
-                    "Continue",
-                    style: TextStyle(
+                  child: Text(
+                    _loading ? "Verifying..." : "Continue",
+                    style: const TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w400,
                       color: Colors.white,
@@ -298,14 +486,19 @@ class _OTPDcodeState extends State<OTPDcode> {
               /// RESEND OTP
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Text("Didn’t get OTP? ", style: TextStyle(fontSize: 14.85)),
-                  Text(
-                    "Resend OTP",
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Color(0xFFE3001B),
-                      fontWeight: FontWeight.w600,
+                children: [
+                  const Text("Didn’t get OTP? ", style: TextStyle(fontSize: 14.85)),
+                  GestureDetector(
+                    onTap: _canResend ? _resendOtp : null,
+                    child: Text(
+                      _resendLabel,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: _canResend
+                            ? const Color(0xFFE3001B)
+                            : const Color(0xFF8D8D8D),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -362,7 +555,9 @@ class _OTPDcodeState extends State<OTPDcode> {
 }
 
 class ResetPasswordDPage extends StatefulWidget {
-  const ResetPasswordDPage({super.key});
+  final String email;
+
+  const ResetPasswordDPage({super.key, required this.email});
 
   @override
   State<ResetPasswordDPage> createState() => _ResetPasswordDPageState();
@@ -382,6 +577,8 @@ class _ResetPasswordDPageState extends State<ResetPasswordDPage> {
   bool keepMeLoggedIn = false;
   bool _showPasswordEyee = false;
   bool _showConfirmPasswordEyee = false;
+  bool _loading = false;
+  String? _errorText;
 
   @override
   void initState() {
@@ -566,24 +763,90 @@ class _ResetPasswordDPageState extends State<ResetPasswordDPage> {
                 ),
 
                 const SizedBox(height: 30),
+                if (_errorText != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _errorText!,
+                      style: const TextStyle(color: Colors.red, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
 
                 SizedBox(
                   width: double.infinity,
                   height: 55,
                   child: ElevatedButton(
-                    onPressed: () {
-                      if (_isContinueEnabled) {
-                        // Navigate to CongratPage
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const CongratsDPage(),
-                          ),
-                        );
-                      }
-                    },
+                    onPressed: (!_isContinueEnabled || _loading)
+                        ? null
+                        : () async {
+                            final newPassword = newPasswordController.text.trim();
+                            final confirmPassword = confirmPasswordController.text
+                                .trim();
+
+                            if (newPassword.length < 6) {
+                              setState(() {
+                                _errorText =
+                                    'New password must be at least 6 characters.';
+                              });
+                              return;
+                            }
+                            if (newPassword != confirmPassword) {
+                              setState(() {
+                                _errorText =
+                                    'New password and retype password do not match.';
+                              });
+                              return;
+                            }
+
+                            setState(() {
+                              _loading = true;
+                              _errorText = null;
+                            });
+
+                            try {
+                              final res = await http.post(
+                                Uri.parse(
+                                  '${Auth.apiBaseUrl}/driver/forgot-password/reset-password',
+                                ),
+                                headers: const {
+                                  'Accept': 'application/json',
+                                  'Content-Type': 'application/json',
+                                },
+                                body: jsonEncode({
+                                  'email': widget.email,
+                                  'new_password': newPassword,
+                                  'new_password_confirmation': confirmPassword,
+                                }),
+                              );
+                              final data = safeDecode(res.body);
+
+                              if (res.statusCode == 200 &&
+                                  data['success'] == true) {
+                                if (!mounted) return;
+                                Navigator.pushReplacement(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => const CongratsDPage(),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              setState(() => _errorText = extractApiMessage(data));
+                            } catch (_) {
+                              setState(() {
+                                _errorText =
+                                    'Could not connect to server. Please try again.';
+                              });
+                            } finally {
+                              if (mounted) {
+                                setState(() => _loading = false);
+                              }
+                            }
+                          },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _isContinueEnabled
+                      backgroundColor: (_isContinueEnabled && !_loading)
                           ? const Color(0xFFE3001B) // red when enabled
                           : const Color(0xFFFF9CA7), // pink when "disabled"
                       shape: RoundedRectangleBorder(
@@ -591,9 +854,9 @@ class _ResetPasswordDPageState extends State<ResetPasswordDPage> {
                       ),
                       elevation: 0,
                     ),
-                    child: const Text(
-                      "Continue",
-                      style: TextStyle(
+                    child: Text(
+                      _loading ? "Updating..." : "Continue",
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w400,
                         color: Colors.white,
@@ -653,7 +916,7 @@ class _ResetPasswordDPageState extends State<ResetPasswordDPage> {
 void main() {
   runApp(
     const MaterialApp(
-      home: ResetPasswordDPage(),
+      home: ForgotPasswordDPage(),
       debugShowCheckedModeBanner: false,
     ),
   );

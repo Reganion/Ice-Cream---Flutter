@@ -160,48 +160,6 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
     );
   }
 
-  Future<bool> _postShipmentAction(String action) async {
-    final id = _shipmentId;
-    if (id == null || _submitting) return false;
-    setState(() => _submitting = true);
-    try {
-      final token = await _token();
-      if (token == null || token.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Missing driver session. Please login again.')),
-          );
-        }
-        return false;
-      }
-      final res = await http.post(
-        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$id/$action'),
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      if (!mounted) return false;
-      if (res.statusCode >= 200 && res.statusCode < 300 && data['success'] == true) {
-        return true;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text((data['message'] ?? 'Action failed.').toString())),
-      );
-      return false;
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Action failed. Check your connection.')),
-        );
-      }
-      return false;
-    } finally {
-      if (mounted) setState(() => _submitting = false);
-    }
-  }
-
   @override
   void dispose() {
     _sheetController.removeListener(_onSheetSizeChange);
@@ -559,8 +517,6 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                                   onPressed: (_loading || _submitting)
                                       ? null
                                       : () async {
-                                          final ok = await _postShipmentAction('deliver');
-                                          if (!mounted || !ok) return;
                                           await _openTakePhotoFlow();
                                         },
                                   style: ElevatedButton.styleFrom(

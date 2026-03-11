@@ -570,6 +570,9 @@ DraggableScrollableSheet(
                                       onPressed: (_loading || _submitting)
                                           ? null
                                           : () async {
+                                              final ok =
+                                                  await _postShipmentAction('deliver');
+                                              if (!mounted || !ok) return;
                                               Navigator.pushReplacement(
                                                 context,
                                                 MaterialPageRoute(

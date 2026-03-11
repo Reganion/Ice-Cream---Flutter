@@ -35,6 +35,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
   bool _hasPhoto = false;
   String? _photoPath;
   bool _loading = true;
+  bool _submitting = false;
   String _error = '';
   Map<String, dynamic>? _shipment;
   final ImagePicker _picker = ImagePicker();
@@ -129,6 +130,98 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
       _photoPath = file.path;
       _hasPhoto = true;
     });
+  }
+
+  String _paymentMethodValue() {
+    if (_selectedPaymentMethod == 0) return 'gcash';
+    if (_selectedPaymentMethod == 1) return 'cash';
+    return '';
+  }
+
+  Future<void> _submitCompleteDelivery() async {
+    if (_submitting) return;
+
+    final id = _shipmentId;
+    if (id == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Shipment ID is missing.')));
+      return;
+    }
+
+    final amountText = _receivedAmountController.text.trim();
+    if (amountText.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Received amount is required.')),
+      );
+      return;
+    }
+
+    final amount = double.tryParse(amountText);
+    if (amount == null || amount < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid received amount.')),
+      );
+      return;
+    }
+
+    if (_photoPath == null || _photoPath!.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Proof photo is required.')));
+      return;
+    }
+
+    setState(() => _submitting = true);
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Missing driver session. Please login again.')),
+        );
+        return;
+      }
+
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$id/complete'),
+      );
+      req.headers['Accept'] = 'application/json';
+      req.headers['Authorization'] = 'Bearer $token';
+      req.fields['received_amount'] = amount.toString();
+      final paymentMethod = _paymentMethodValue();
+      if (paymentMethod.isNotEmpty) {
+        req.fields['payment_method'] = paymentMethod;
+      }
+      req.files.add(await http.MultipartFile.fromPath('proof_photo', _photoPath!));
+
+      final streamed = await req.send();
+      final res = await http.Response.fromStream(streamed);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+
+      if (!mounted) return;
+      if (res.statusCode >= 200 && res.statusCode < 300 && data['success'] == true) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => const CompleteDeliverySuccessPage(),
+          ),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text((data['message'] ?? 'Submit failed.').toString())),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Submit failed. Check your connection.')),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -511,14 +604,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) => const CompleteDeliverySuccessPage(),
-                            ),
-                          );
-                        },
+                        onPressed: (_loading || _submitting) ? null : _submitCompleteDelivery,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF00AE2A),
                           foregroundColor: Colors.white,

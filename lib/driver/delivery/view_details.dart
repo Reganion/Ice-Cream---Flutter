@@ -104,12 +104,223 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
     }
   }
 
+  String _resolveProofImageUrl(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty || value.toLowerCase() == 'null') return '';
+    final apiUri = Uri.parse(Auth.apiBaseUrl);
+    final origin = '${apiUri.scheme}://${apiUri.authority}';
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      final remote = Uri.tryParse(value);
+      if (remote == null) return value;
+
+      // Backend may return localhost/127.0.0.1 in APP_URL; remap to API host for devices.
+      const localHosts = {'localhost', '127.0.0.1', '::1'};
+      if (localHosts.contains(remote.host.toLowerCase())) {
+        final remapped = remote.replace(
+          scheme: apiUri.scheme,
+          host: apiUri.host,
+          port: apiUri.hasPort ? apiUri.port : null,
+        );
+        return remapped.toString();
+      }
+      return value;
+    }
+
+    if (value.startsWith('/')) {
+      return '$origin$value';
+    }
+    if (value.startsWith('storage/')) {
+      return '$origin/$value';
+    }
+    return '$origin/storage/$value';
+  }
+
+  String _firstNonEmpty(Iterable<dynamic> values, {String fallback = '—'}) {
+    for (final v in values) {
+      final s = (v ?? '').toString().trim();
+      if (s.isNotEmpty && s.toLowerCase() != 'null') return s;
+    }
+    return fallback;
+  }
+
+  String _formatYmdDate(String value) {
+    final date = DateTime.tryParse(value.trim());
+    if (date == null) return value;
+    const months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+
+  String _toShortMonthDate(String value) {
+    final input = value.trim();
+    if (input.isEmpty || input == '—' || input.toLowerCase() == 'null') return '—';
+
+    // Try direct parse first (works for ISO-like strings).
+    final parsed = DateTime.tryParse(input);
+    if (parsed != null) {
+      return _formatYmdDate(parsed.toIso8601String());
+    }
+
+    // Convert "10 March 2026" -> "10 Mar 2026".
+    const fullToShort = <String, String>{
+      'january': 'Jan',
+      'february': 'Feb',
+      'march': 'Mar',
+      'april': 'Apr',
+      'may': 'May',
+      'june': 'Jun',
+      'july': 'Jul',
+      'august': 'Aug',
+      'september': 'Sep',
+      'october': 'Oct',
+      'november': 'Nov',
+      'december': 'Dec',
+    };
+    final parts = input.split(RegExp(r'\s+'));
+    if (parts.length >= 3) {
+      final month = parts[1].toLowerCase();
+      final short = fullToShort[month];
+      if (short != null) {
+        parts[1] = short;
+        return '${parts[0]} ${parts[1]} ${parts[2]}';
+      }
+    }
+    return input;
+  }
+
+  String _formatDisplayTime(String value) {
+    final input = value.trim();
+    if (input.isEmpty || input == '—' || input.toLowerCase() == 'null') return '—';
+
+    // 12-hour input like "9:10 PM" or "09:10PM".
+    final twelveHour = RegExp(r'^(\d{1,2}):(\d{2})\s*([aApP][mM])$');
+    final m12 = twelveHour.firstMatch(input);
+    if (m12 != null) {
+      final hour = int.tryParse(m12.group(1) ?? '');
+      final minute = m12.group(2) ?? '00';
+      final suffix = (m12.group(3) ?? '').toUpperCase();
+      if (hour != null && hour >= 1 && hour <= 12) {
+        return '${hour.toString().padLeft(2, '0')}:$minute$suffix';
+      }
+    }
+
+    // 24-hour input like "21:10".
+    final twentyFourHour = RegExp(r'^(\d{1,2}):(\d{2})$');
+    final m24 = twentyFourHour.firstMatch(input);
+    if (m24 != null) {
+      final h24 = int.tryParse(m24.group(1) ?? '');
+      final minute = m24.group(2) ?? '00';
+      if (h24 != null && h24 >= 0 && h24 <= 23) {
+        final isPm = h24 >= 12;
+        final h12 = (h24 % 12 == 0) ? 12 : (h24 % 12);
+        return '${h12.toString().padLeft(2, '0')}:$minute${isPm ? 'PM' : 'AM'}';
+      }
+    }
+
+    // 24-hour input with seconds like "21:10:00".
+    final twentyFourWithSeconds = RegExp(r'^(\d{1,2}):(\d{2}):(\d{2})$');
+    final m24s = twentyFourWithSeconds.firstMatch(input);
+    if (m24s != null) {
+      final h24 = int.tryParse(m24s.group(1) ?? '');
+      final minute = m24s.group(2) ?? '00';
+      if (h24 != null && h24 >= 0 && h24 <= 23) {
+        final isPm = h24 >= 12;
+        final h12 = (h24 % 12 == 0) ? 12 : (h24 % 12);
+        return '${h12.toString().padLeft(2, '0')}:$minute${isPm ? 'PM' : 'AM'}';
+      }
+    }
+
+    return input;
+  }
+
+  String _formatIsoToCompactTime(String value) {
+    final dt = DateTime.tryParse(value.trim());
+    if (dt == null) return '';
+    final isPm = dt.hour >= 12;
+    final h12 = (dt.hour % 12 == 0) ? 12 : (dt.hour % 12);
+    final hh = h12.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm${isPm ? 'PM' : 'AM'}';
+  }
+
+  String _datePartFromSchedule(String schedule) {
+    final s = schedule.trim();
+    if (s.isEmpty || s == '—') return '—';
+    final parts = s.split(',');
+    return parts.first.trim();
+  }
+
+  String _timePartFromSchedule(String schedule) {
+    final s = schedule.trim();
+    if (s.isEmpty || s == '—') return '—';
+    final parts = s.split(',');
+    if (parts.length < 2) return '—';
+    return parts.sublist(1).join(',').trim();
+  }
+
+  String _distanceText() {
+    final raw = _shipment?['distance_text'] ??
+        _shipment?['distance_km'] ??
+        _shipment?['distance'];
+    if (raw == null) return '—';
+    if (raw is num) return '${raw.toString()} km';
+    final s = raw.toString().trim();
+    if (s.isEmpty || s.toLowerCase() == 'null') return '—';
+    return s;
+  }
+
   @override
   Widget build(BuildContext context) {
     const Color kText = Color(0xFF111111);
     const Color kMuted = Color(0xFF606060);
-    final imageUrl = (_shipment?['proof_image_url'] ?? _shipment?['proof_image'] ?? '')
-        .toString();
+    final scheduleText = (_shipment?['expected_on'] ?? '—').toString();
+    final rawDeliveryDate = _shipment?['delivery_date'];
+    final deliveredDateFromApi = _toShortMonthDate(
+      (_shipment?['delivered_date'] ?? '').toString(),
+    );
+    final deliveredDate = _firstNonEmpty([
+      deliveredDateFromApi,
+      rawDeliveryDate != null ? _formatYmdDate(rawDeliveryDate.toString()) : null,
+      _datePartFromSchedule(scheduleText),
+      scheduleText,
+    ]);
+    final deliveredTimeRaw = _firstNonEmpty([
+      _shipment?['delivery_time_compact'],
+      _formatDisplayTime((_shipment?['delivery_time'] ?? '').toString()),
+      _shipment?['delivered_time_compact'],
+      _shipment?['delivered_time'],
+      _formatIsoToCompactTime((_shipment?['delivered_at'] ?? '').toString()),
+      _shipment?['expected_time'],
+      _shipment?['time'],
+      _timePartFromSchedule(scheduleText),
+    ]);
+    final deliveredTime = _formatDisplayTime(deliveredTimeRaw);
+    final distanceText = _distanceText();
+    final travelTimeText = _firstNonEmpty([
+      _shipment?['travel_time'],
+      _shipment?['duration_text'],
+      _shipment?['duration'],
+    ]);
+    final imageUrl = _resolveProofImageUrl(
+      (_shipment?['delivery_proof_url'] ??
+              _shipment?['delivery_proof_image'] ??
+              _shipment?['proof_image_url'] ??
+              _shipment?['proof_image'] ??
+              '')
+          .toString(),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F6F6),
@@ -152,7 +363,7 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
               children: [
                 Expanded(
                   child: _TopMeta(
-                    title: (_shipment?['expected_on'] ?? '—').toString(),
+                    title: deliveredDate,
                     subtitle: 'Delivered',
                     titleFontSize: 26,
                     subtitleFontSize: 13,
@@ -160,8 +371,7 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
                 ),
                 Expanded(
                   child: _TopMeta(
-                    title: (_shipment?['delivered_time'] ?? _shipment?['time'] ?? '—')
-                        .toString(),
+                    title: deliveredTime,
                     subtitle: 'Time',
                     titleFontSize: 26,
                     subtitleFontSize: 13,
@@ -183,17 +393,17 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: _TopMeta(
-                    title: '—',
+                    title: distanceText,
                     subtitle: 'Distance',
                     titleFontSize: 18,
                     subtitleFontSize: 12,
                   ),
                 ),
-                const Expanded(
+                Expanded(
                   child: _TopMeta(
-                    title: '—',
+                    title: travelTimeText,
                     subtitle: 'Travel time',
                     titleFontSize: 18,
                     subtitleFontSize: 12,
@@ -269,7 +479,15 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
                   ),
                   _InfoRow(
                     label: 'Amount:',
-                    value: _fmtMoney(_shipment?['amount_text'] ?? _shipment?['amount']),
+                    value: _fmtMoney(
+                      _shipment?['received_amount'] ??
+                          _shipment?['amount_text'] ??
+                          _shipment?['amount'],
+                    ),
+                  ),
+                  _InfoRow(
+                    label: 'Payment Method:',
+                    value: _firstNonEmpty([_shipment?['delivery_payment_method']]),
                   ),
                   _InfoRow(
                     label: 'Customer Number:',
@@ -292,7 +510,7 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
               borderRadius: BorderRadius.circular(14),
               child: AspectRatio(
                 aspectRatio: 16 / 9,
-                child: imageUrl.isNotEmpty && imageUrl.startsWith('http')
+                child: imageUrl.isNotEmpty
                     ? Image.network(
                         imageUrl,
                         fit: BoxFit.cover,
