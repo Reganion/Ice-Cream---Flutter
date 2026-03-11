@@ -18,10 +18,16 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _loading = true;
   int _totalDelivered = 0;
   Map<String, dynamic> _driver = <String, dynamic>{};
+  String _storedPassword = '';
 
   String get _name => (_driver['name'] ?? '').toString().trim();
   String get _phone => (_driver['phone'] ?? '').toString().trim();
   String get _email => (_driver['email'] ?? '').toString().trim();
+  String get _password {
+    final fromDriver = (_driver['password'] ?? '').toString();
+    if (fromDriver.isNotEmpty) return fromDriver;
+    return _storedPassword;
+  }
   String get _licenseNo => (_driver['license_no'] ?? '').toString().trim();
   String get _licenseType => (_driver['license_type'] ?? '').toString().trim();
   String? get _imageUrl {
@@ -29,6 +35,11 @@ class _ProfilePageState extends State<ProfilePage> {
     if (v == null) return null;
     final s = v.toString().trim();
     return s.isEmpty ? null : s;
+  }
+
+  Future<void> _saveDriverProfileCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('driver_profile', jsonEncode(_driver));
   }
 
   @override
@@ -42,10 +53,15 @@ class _ProfilePageState extends State<ProfilePage> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('driver_token');
       final cached = prefs.getString('driver_profile');
+      _storedPassword = prefs.getString('driver_password') ?? '';
 
       if (cached != null && cached.isNotEmpty) {
         try {
           final map = jsonDecode(cached) as Map<String, dynamic>;
+          if ((map['password'] ?? '').toString().isEmpty &&
+              _storedPassword.isNotEmpty) {
+            map['password'] = _storedPassword;
+          }
           if (mounted) setState(() => _driver = map);
         } catch (_) {}
       }
@@ -82,6 +98,10 @@ class _ProfilePageState extends State<ProfilePage> {
         final meData = jsonDecode(meRes.body) as Map<String, dynamic>;
         final driver = meData['driver'];
         if (driver is Map<String, dynamic>) {
+          if ((driver['password'] ?? '').toString().isEmpty &&
+              _storedPassword.isNotEmpty) {
+            driver['password'] = _storedPassword;
+          }
           _driver = driver;
           await prefs.setString('driver_profile', jsonEncode(driver));
         }
@@ -115,6 +135,7 @@ class _ProfilePageState extends State<ProfilePage> {
     }
     await prefs.remove('driver_token');
     await prefs.remove('driver_profile');
+    await prefs.remove('driver_password');
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => const LoginScreen()),
@@ -406,15 +427,56 @@ class _ProfilePageState extends State<ProfilePage> {
                           value: _email.isNotEmpty ? _email : "—",
                           trailingText: "Change",
                           showDivider: true,
-                          onTap: () {
-                            Navigator.push(
+                          onTap: () async {
+                            final updatedEmail = await Navigator.push<String>(
                               context,
-                              MaterialPageRoute<void>(
+                              MaterialPageRoute<String>(
                                 builder: (context) => EditEmailAddressPage(
                                   initialEmail: _email,
                                 ),
                               ),
                             );
+                            if (updatedEmail == null ||
+                                updatedEmail.trim().isEmpty) {
+                              return;
+                            }
+                            if (!mounted) return;
+                            setState(() {
+                              _driver['email'] = updatedEmail.trim();
+                            });
+                            await _saveDriverProfileCache();
+                          },
+                        ),
+                        _InfoRow(
+                          label: "Password",
+                          value: _password.isNotEmpty ? "••••••••" : "—",
+                          trailingText: "Change",
+                          showDivider: true,
+                          onTap: () async {
+                            final updatedPassword = await Navigator.push<String>(
+                              context,
+                              MaterialPageRoute<String>(
+                                builder: (context) => EditPasswordPage(
+                                  initialPassword: _password,
+                                  currentEmail: _email,
+                                ),
+                              ),
+                            );
+
+                            if (updatedPassword == null ||
+                                updatedPassword.trim().isEmpty) {
+                              return;
+                            }
+
+                            final trimmed = updatedPassword.trim();
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setString('driver_password', trimmed);
+                            if (!mounted) return;
+                            setState(() {
+                              _storedPassword = trimmed;
+                              _driver['password'] = trimmed;
+                            });
+                            await _saveDriverProfileCache();
                           },
                         ),
                         _InfoRow(
@@ -630,30 +692,68 @@ class EditEmailAddressPage extends StatefulWidget {
 }
 
 class _EditEmailAddressPageState extends State<EditEmailAddressPage> {
-  late final TextEditingController _controller;
+  late final TextEditingController _emailController;
+  late final TextEditingController _passwordController;
   late final VoidCallback _listener;
+  bool _sending = false;
+  bool _obscurePassword = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialEmail);
+    _emailController = TextEditingController(text: widget.initialEmail);
+    _passwordController = TextEditingController();
     _listener = () => setState(() {});
-    _controller.addListener(_listener);
+    _emailController.addListener(_listener);
+    _passwordController.addListener(_listener);
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_listener);
-    _controller.dispose();
+    _emailController.removeListener(_listener);
+    _passwordController.removeListener(_listener);
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
+  }
+
+  bool get _canSubmit {
+    return _emailController.text.trim().isNotEmpty &&
+        _passwordController.text.trim().isNotEmpty &&
+        !_sending;
+  }
+
+  Future<void> _sendOtp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) {
+      throw Exception('Not authenticated. Please login again.');
+    }
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-email/send-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'current_password': _passwordController.text.trim(),
+        'new_email': _emailController.text.trim(),
+      }),
+    );
+
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) return;
+    throw Exception(_extractApiMessage(data));
   }
 
   @override
   Widget build(BuildContext context) {
     const defaultPink = Color(0xFFFF9CA7);
     const activeRed = Color(0xFFE3001B);
-    final hasValue = _controller.text.trim().isNotEmpty;
-    final buttonColor = hasValue ? activeRed : defaultPink;
+    final buttonColor = _canSubmit ? activeRed : defaultPink;
 
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFA),
@@ -692,18 +792,59 @@ class _EditEmailAddressPageState extends State<EditEmailAddressPage> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Keep your email up to date.',
+                'Enter current password then verify OTP sent to your new email.',
                 style: TextStyle(
                   fontSize: 15,
                   color: Color(0xFF747474),
                   fontWeight: FontWeight.w400,
                 ),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 28),
               TextField(
-                controller: _controller,
+                controller: _passwordController,
+                obscureText: _obscurePassword,
                 decoration: InputDecoration(
-                  hintText: 'Email',
+                  hintText: 'Current password',
+                  hintStyle: const TextStyle(
+                    color: Color(0xFF696969),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w400,
+                  ),
+                  suffixIcon: IconButton(
+                    onPressed: () => setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    ),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                      size: 20,
+                      color: const Color(0xFF777777),
+                    ),
+                  ),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8C8C8C)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8C8C8C)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8C8C8C), width: 1.2),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                ),
+                style: const TextStyle(fontSize: 16, color: Color(0xFF1C1B1F)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emailController,
+                decoration: InputDecoration(
+                  hintText: 'New email',
                   hintStyle: const TextStyle(
                     color: Color(0xFF696969),
                     fontSize: 15,
@@ -728,19 +869,53 @@ class _EditEmailAddressPageState extends State<EditEmailAddressPage> {
                 style: const TextStyle(fontSize: 16, color: Color(0xFF1C1B1F)),
                 keyboardType: TextInputType.emailAddress,
               ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
               const Spacer(),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    if (!hasValue) return;
-                    showEmailSuccessDialog(context);
-                    Future.delayed(const Duration(seconds: 3), () {
-                      if (!context.mounted) return;
-                      Navigator.pop(context); // close dialog
-                      Navigator.pop(context); // back to ProfilePage
-                    });
-                  },
+                  onPressed: _canSubmit
+                      ? () async {
+                          setState(() {
+                            _sending = true;
+                            _error = null;
+                          });
+                          try {
+                            await _sendOtp();
+                            if (!mounted) return;
+                            final updatedEmail = await Navigator.push<String>(
+                              context,
+                              MaterialPageRoute<String>(
+                                builder: (_) => DriverEmailOtpPage(
+                                  pendingEmail: _emailController.text.trim(),
+                                ),
+                              ),
+                            );
+                            if (!mounted) return;
+                            if (updatedEmail != null && updatedEmail.trim().isNotEmpty) {
+                              Navigator.pop(context, updatedEmail.trim());
+                            }
+                          } catch (e) {
+                            if (!mounted) return;
+                            setState(() {
+                              _error = e.toString().replaceFirst('Exception: ', '');
+                            });
+                          } finally {
+                            if (mounted) setState(() => _sending = false);
+                          }
+                        }
+                      : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: buttonColor,
                     foregroundColor: Colors.white,
@@ -750,8 +925,8 @@ class _EditEmailAddressPageState extends State<EditEmailAddressPage> {
                     ),
                     elevation: 0,
                   ),
-                  child: const Text(
-                    'Update',
+                  child: Text(
+                    _sending ? 'Sending OTP...' : 'Update',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w400,
@@ -766,6 +941,781 @@ class _EditEmailAddressPageState extends State<EditEmailAddressPage> {
       ),
     );
   }
+}
+
+/// Edit password screen: same layout as other edit screens.
+class EditPasswordPage extends StatefulWidget {
+  final String initialPassword;
+  final String currentEmail;
+
+  const EditPasswordPage({
+    super.key,
+    this.initialPassword = '',
+    this.currentEmail = '',
+  });
+
+  @override
+  State<EditPasswordPage> createState() => _EditPasswordPageState();
+}
+
+class _EditPasswordPageState extends State<EditPasswordPage> {
+  late final TextEditingController _currentPasswordController;
+  late final TextEditingController _newPasswordController;
+  late final TextEditingController _retypePasswordController;
+  late final VoidCallback _listener;
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+  bool _obscureRetype = true;
+  bool _sending = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPasswordController = TextEditingController();
+    _newPasswordController = TextEditingController();
+    _retypePasswordController = TextEditingController();
+    _listener = () => setState(() {});
+    _currentPasswordController.addListener(_listener);
+    _newPasswordController.addListener(_listener);
+    _retypePasswordController.addListener(_listener);
+  }
+
+  @override
+  void dispose() {
+    _currentPasswordController.removeListener(_listener);
+    _newPasswordController.removeListener(_listener);
+    _retypePasswordController.removeListener(_listener);
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _retypePasswordController.dispose();
+    super.dispose();
+  }
+
+  bool get _canSubmit {
+    return _currentPasswordController.text.trim().isNotEmpty &&
+        _newPasswordController.text.trim().isNotEmpty &&
+        _retypePasswordController.text.trim().isNotEmpty &&
+        !_sending;
+  }
+
+  Future<void> _sendOtp() async {
+    final currentPassword = _currentPasswordController.text.trim();
+    final newPassword = _newPasswordController.text.trim();
+    final retypePassword = _retypePasswordController.text.trim();
+    if (newPassword != retypePassword) {
+      throw Exception('New password and retype password do not match.');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) {
+      throw Exception('Not authenticated. Please login again.');
+    }
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-password/send-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'current_password': currentPassword,
+        'new_password': newPassword,
+        'new_password_confirmation': retypePassword,
+      }),
+    );
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) return;
+    throw Exception(_extractApiMessage(data));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const defaultPink = Color(0xFFFF9CA7);
+    const activeRed = Color(0xFFE3001B);
+    final buttonColor = _canSubmit ? activeRed : defaultPink;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFFAFAFA),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    width: 43,
+                    height: 43,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0xFFF2F2F2),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.close, size: 20, color: Color(0xFF414141)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Change password',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF1C1B1F),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Enter current, new, retype password then verify OTP in email.',
+                style: TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF747474),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 28),
+              _passwordField(
+                controller: _currentPasswordController,
+                hintText: 'Current password',
+                obscureText: _obscureCurrent,
+                onToggle: () => setState(() => _obscureCurrent = !_obscureCurrent),
+              ),
+              const SizedBox(height: 12),
+              _passwordField(
+                controller: _newPasswordController,
+                hintText: 'New password',
+                obscureText: _obscureNew,
+                onToggle: () => setState(() => _obscureNew = !_obscureNew),
+              ),
+              const SizedBox(height: 12),
+              _passwordField(
+                controller: _retypePasswordController,
+                hintText: 'Retype password',
+                obscureText: _obscureRetype,
+                onToggle: () => setState(() => _obscureRetype = !_obscureRetype),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _canSubmit
+                      ? () async {
+                          setState(() {
+                            _sending = true;
+                            _error = null;
+                          });
+                          try {
+                            await _sendOtp();
+                            if (!mounted) return;
+                            final ok = await Navigator.push<bool>(
+                              context,
+                              MaterialPageRoute<bool>(
+                                builder: (_) => DriverPasswordOtpPage(
+                                  email: widget.currentEmail,
+                                ),
+                              ),
+                            );
+                            if (!mounted) return;
+                            if (ok == true) {
+                              Navigator.pop(context, _newPasswordController.text.trim());
+                            }
+                          } catch (e) {
+                            if (!mounted) return;
+                            setState(() {
+                              _error = e.toString().replaceFirst('Exception: ', '');
+                            });
+                          } finally {
+                            if (mounted) setState(() => _sending = false);
+                          }
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: buttonColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _sending ? 'Sending OTP...' : 'Update',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _passwordField({
+    required TextEditingController controller,
+    required String hintText,
+    required bool obscureText,
+    required VoidCallback onToggle,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscureText,
+      decoration: InputDecoration(
+        hintText: hintText,
+        hintStyle: const TextStyle(
+          color: Color(0xFF696969),
+          fontSize: 15,
+          fontWeight: FontWeight.w400,
+        ),
+        suffixIcon: IconButton(
+          onPressed: onToggle,
+          icon: Icon(
+            obscureText ? Icons.visibility_off : Icons.visibility,
+            size: 20,
+            color: const Color(0xFF777777),
+          ),
+        ),
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF8C8C8C)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF8C8C8C)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF8C8C8C), width: 1.2),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      ),
+      style: const TextStyle(fontSize: 16, color: Color(0xFF1C1B1F)),
+    );
+  }
+}
+
+class DriverEmailOtpPage extends StatefulWidget {
+  final String pendingEmail;
+
+  const DriverEmailOtpPage({super.key, required this.pendingEmail});
+
+  @override
+  State<DriverEmailOtpPage> createState() => _DriverEmailOtpPageState();
+}
+
+class _DriverEmailOtpPageState extends State<DriverEmailOtpPage> {
+  final List<String> _otp = ["", "", "", ""];
+  bool _loading = false;
+  String? _error;
+
+  bool get _isFilled => _otp.every((v) => v.isNotEmpty);
+
+  Future<void> _verifyOtp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) throw Exception('Not authenticated. Please login again.');
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-email/verify-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'otp': _otp.join()}),
+    );
+
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final driver = data['driver'];
+      if (driver is Map<String, dynamic>) {
+        await prefs.setString('driver_profile', jsonEncode(driver));
+      }
+      return;
+    }
+    throw Exception(_extractApiMessage(data));
+  }
+
+  Future<void> _resendOtp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) throw Exception('Not authenticated. Please login again.');
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-email/resend-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) return;
+    throw Exception(_extractApiMessage(data));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    width: 43,
+                    height: 43,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF2F2F2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.arrow_back, color: Colors.black, size: 20),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 120),
+              const Text(
+                "Enter OTP Code",
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1C1C1C),
+                ),
+              ),
+              const SizedBox(height: 8),
+              RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  text: "We sent code to ",
+                  style: const TextStyle(fontSize: 15, color: Color(0xFF505050)),
+                  children: [
+                    TextSpan(
+                      text: widget.pendingEmail,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFF1C1B1F),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              const SizedBox(height: 50),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  4,
+                  (index) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: _OtpInput(
+                      index: index,
+                      onChanged: (value) {
+                        setState(() => _otp[index] = value);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                height: 55,
+                child: ElevatedButton(
+                  onPressed: (_isFilled && !_loading)
+                      ? () async {
+                          setState(() {
+                            _loading = true;
+                            _error = null;
+                          });
+                          try {
+                            await _verifyOtp();
+                            if (!mounted) return;
+                            Navigator.pop(context, widget.pendingEmail);
+                          } catch (e) {
+                            if (!mounted) return;
+                            setState(() {
+                              _error = e.toString().replaceFirst('Exception: ', '');
+                            });
+                          } finally {
+                            if (mounted) setState(() => _loading = false);
+                          }
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        (_isFilled && !_loading) ? const Color(0xFFE3001B) : const Color(0xFFFF9CA7),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    elevation: 0,
+                  ),
+                  child: Text(_loading ? "Verifying..." : "Continue"),
+                ),
+              ),
+              const SizedBox(height: 35),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text("Didn’t get OTP? ", style: TextStyle(fontSize: 14.85)),
+                  GestureDetector(
+                    onTap: _loading
+                        ? null
+                        : () async {
+                            try {
+                              await _resendOtp();
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('A new OTP has been sent.')),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+                              );
+                            }
+                          },
+                    child: const Text(
+                      "Resend OTP",
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFFE3001B),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DriverPasswordOtpPage extends StatefulWidget {
+  final String email;
+
+  const DriverPasswordOtpPage({super.key, required this.email});
+
+  @override
+  State<DriverPasswordOtpPage> createState() => _DriverPasswordOtpPageState();
+}
+
+class _DriverPasswordOtpPageState extends State<DriverPasswordOtpPage> {
+  final List<String> _otp = ["", "", "", ""];
+  bool _loading = false;
+  String? _error;
+
+  bool get _isFilled => _otp.every((v) => v.isNotEmpty);
+
+  Future<void> _verifyOtp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) throw Exception('Not authenticated. Please login again.');
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-password/verify-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'otp': _otp.join()}),
+    );
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) return;
+    throw Exception(_extractApiMessage(data));
+  }
+
+  Future<void> _resendOtp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token') ?? '';
+    if (token.isEmpty) throw Exception('Not authenticated. Please login again.');
+
+    final response = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/change-password/resend-otp'),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+    final data = _safeDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) return;
+    throw Exception(_extractApiMessage(data));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shownEmail = widget.email.trim().isEmpty ? 'your email' : widget.email.trim();
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    width: 43,
+                    height: 43,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF2F2F2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.arrow_back, color: Colors.black, size: 20),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 120),
+              const Text(
+                "Enter OTP Code",
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1C1C1C),
+                ),
+              ),
+              const SizedBox(height: 8),
+              RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  text: "We sent code to ",
+                  style: const TextStyle(fontSize: 15, color: Color(0xFF505050)),
+                  children: [
+                    TextSpan(
+                      text: shownEmail,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFF1C1B1F),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              const SizedBox(height: 50),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  4,
+                  (index) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: _OtpInput(
+                      index: index,
+                      onChanged: (value) {
+                        setState(() => _otp[index] = value);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                height: 55,
+                child: ElevatedButton(
+                  onPressed: (_isFilled && !_loading)
+                      ? () async {
+                          setState(() {
+                            _loading = true;
+                            _error = null;
+                          });
+                          try {
+                            await _verifyOtp();
+                            if (!mounted) return;
+                            Navigator.pop(context, true);
+                          } catch (e) {
+                            if (!mounted) return;
+                            setState(() {
+                              _error = e.toString().replaceFirst('Exception: ', '');
+                            });
+                          } finally {
+                            if (mounted) setState(() => _loading = false);
+                          }
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        (_isFilled && !_loading) ? const Color(0xFFE3001B) : const Color(0xFFFF9CA7),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    elevation: 0,
+                  ),
+                  child: Text(_loading ? "Verifying..." : "Continue"),
+                ),
+              ),
+              const SizedBox(height: 35),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text("Didn’t get OTP? ", style: TextStyle(fontSize: 14.85)),
+                  GestureDetector(
+                    onTap: _loading
+                        ? null
+                        : () async {
+                            try {
+                              await _resendOtp();
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('A new OTP has been sent.')),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+                              );
+                            }
+                          },
+                    child: const Text(
+                      "Resend OTP",
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFFE3001B),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OtpInput extends StatelessWidget {
+  final int index;
+  final ValueChanged<String> onChanged;
+
+  const _OtpInput({required this.index, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 60,
+      height: 65,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.10),
+            blurRadius: 18,
+            spreadRadius: 2,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: TextField(
+        textAlign: TextAlign.center,
+        keyboardType: TextInputType.number,
+        maxLength: 1,
+        cursorColor: Colors.black,
+        cursorHeight: 18,
+        cursorWidth: 2,
+        cursorRadius: const Radius.circular(3),
+        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+        decoration: const InputDecoration(
+          counterText: "",
+          border: InputBorder.none,
+        ),
+        onChanged: (value) {
+          onChanged(value);
+          if (value.isNotEmpty && index < 3) {
+            FocusScope.of(context).nextFocus();
+          } else if (value.isEmpty && index > 0) {
+            FocusScope.of(context).previousFocus();
+          }
+        },
+      ),
+    );
+  }
+}
+
+Map<String, dynamic> _safeDecode(String body) {
+  try {
+    return jsonDecode(body) as Map<String, dynamic>;
+  } catch (_) {
+    return <String, dynamic>{};
+  }
+}
+
+String _extractApiMessage(Map<String, dynamic> data) {
+  final errors = data['errors'];
+  if (errors is Map<String, dynamic>) {
+    for (final entry in errors.entries) {
+      final value = entry.value;
+      if (value is List && value.isNotEmpty && value.first is String) {
+        return value.first as String;
+      }
+      if (value is String && value.trim().isNotEmpty) {
+        return value;
+      }
+    }
+  }
+  final message = data['message'];
+  if (message is String && message.trim().isNotEmpty) {
+    return message;
+  }
+  return 'Request failed. Please try again.';
 }
 
 class _InfoRow extends StatelessWidget {
@@ -937,6 +1887,55 @@ Future<void> showEmailSuccessDialog(BuildContext context) {
               const SizedBox(height: 8),
               const Text(
                 "Your email has been successfully updated",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13.23,
+                  color: Color(0xFF5B5B5B),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+Future<void> showPasswordSuccessDialog(BuildContext context) {
+  return showDialog(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) {
+      return Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10.83),
+        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 30),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Icon(
+                Symbols.check_circle,
+                size: 44,
+                color: Color(0xFF22B345),
+                fill: 1,
+                weight: 400,
+                grade: 0,
+                opticalSize: 24,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Successfully Updated",
+                style: TextStyle(fontSize: 19.85, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Your password has been successfully updated",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13.23,

@@ -109,6 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (token != null && token.isNotEmpty) {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString('driver_token', token);
+          await prefs.setString('driver_password', password);
           if (driver != null) {
             await prefs.setString('driver_profile', jsonEncode(driver));
           }
