@@ -143,6 +143,346 @@ Future<bool> markChatRead() async {
   return res.statusCode == 200;
 }
 
+// --- Order Message API (Customer <-> Driver) ---
+
+class DriverOrderThread {
+  final int orderId;
+  final List<int> relatedOrderIds;
+  final String driverName;
+  final String driverContact;
+  final String transactionId;
+  final String orderLabel;
+  final String? preview;
+  final DateTime? lastAt;
+
+  const DriverOrderThread({
+    required this.orderId,
+    this.relatedOrderIds = const [],
+    required this.driverName,
+    this.driverContact = '',
+    required this.transactionId,
+    required this.orderLabel,
+    this.preview,
+    this.lastAt,
+  });
+
+  DriverOrderThread copyWith({
+    int? orderId,
+    List<int>? relatedOrderIds,
+    String? driverName,
+    String? driverContact,
+    String? transactionId,
+    String? orderLabel,
+    String? preview,
+    DateTime? lastAt,
+  }) {
+    return DriverOrderThread(
+      orderId: orderId ?? this.orderId,
+      relatedOrderIds: relatedOrderIds ?? this.relatedOrderIds,
+      driverName: driverName ?? this.driverName,
+      driverContact: driverContact ?? this.driverContact,
+      transactionId: transactionId ?? this.transactionId,
+      orderLabel: orderLabel ?? this.orderLabel,
+      preview: preview ?? this.preview,
+      lastAt: lastAt ?? this.lastAt,
+    );
+  }
+}
+
+class OrderMessageItem {
+  final int id;
+  final int orderId;
+  final String senderType;
+  final String message;
+  final bool isMine;
+  final DateTime? createdAt;
+
+  const OrderMessageItem({
+    required this.id,
+    required this.orderId,
+    required this.senderType,
+    required this.message,
+    required this.isMine,
+    required this.createdAt,
+  });
+
+  factory OrderMessageItem.fromJson(Map<String, dynamic> json) {
+    final idRaw = json['id'];
+    final orderIdRaw = json['order_id'];
+    final createdAtRaw = json['created_at']?.toString();
+    return OrderMessageItem(
+      id: idRaw is int ? idRaw : int.tryParse(idRaw?.toString() ?? '') ?? 0,
+      orderId: orderIdRaw is int ? orderIdRaw : int.tryParse(orderIdRaw?.toString() ?? '') ?? 0,
+      senderType: (json['sender_type'] ?? '').toString(),
+      message: (json['message'] ?? '').toString(),
+      isMine: json['is_mine'] == true,
+      createdAt: createdAtRaw == null ? null : DateTime.tryParse(createdAtRaw)?.toLocal(),
+    );
+  }
+}
+
+Future<List<OrderMessageItem>?> fetchOrderMessages({
+  required int orderId,
+  int perPage = 100,
+}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return null;
+  final uri = Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages')
+      .replace(queryParameters: {'per_page': '$perPage'});
+  final res = await http.get(
+    uri,
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  if (res.statusCode != 200 || data == null || data['success'] != true) return null;
+  final list = data['data'] as List<dynamic>?;
+  if (list == null) return [];
+  return list
+      .whereType<Map>()
+      .map((e) => OrderMessageItem.fromJson(Map<String, dynamic>.from(e)))
+      .toList();
+}
+
+Future<OrderMessageItem?> sendOrderMessage({
+  required int orderId,
+  required String message,
+}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return null;
+  final res = await http.post(
+    Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages'),
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    },
+    body: jsonEncode({'message': message.trim()}),
+  );
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  if (data == null || data['success'] != true) return null;
+  final item = data['data'] as Map<String, dynamic>?;
+  return item == null ? null : OrderMessageItem.fromJson(item);
+}
+
+Future<bool> markOrderMessagesRead({required int orderId}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final res = await http.post(
+    Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages/read'),
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  return res.statusCode == 200;
+}
+
+DateTime? _parseDateTimeMaybe(dynamic value) {
+  final s = value?.toString();
+  if (s == null || s.trim().isEmpty) return null;
+  return DateTime.tryParse(s)?.toLocal();
+}
+
+String _pickFirstNonEmpty(List<dynamic> values) {
+  for (final v in values) {
+    final s = (v ?? '').toString().trim();
+    if (s.isNotEmpty) return s;
+  }
+  return '';
+}
+
+String _extractDriverNameFromOrder(Map<String, dynamic> order) {
+  String fullFromParts(Map<String, dynamic> src) {
+    final first = _pickFirstNonEmpty([
+      src['firstname'],
+      src['first_name'],
+      src['given_name'],
+      src['driver_first_name'],
+      src['assigned_driver_first_name'],
+      src['rider_first_name'],
+    ]);
+    final last = _pickFirstNonEmpty([
+      src['lastname'],
+      src['last_name'],
+      src['family_name'],
+      src['driver_last_name'],
+      src['assigned_driver_last_name'],
+      src['rider_last_name'],
+    ]);
+    final full = '$first $last'.trim();
+    return full;
+  }
+
+  final direct = _pickFirstNonEmpty([
+    order['driver_name'],
+    order['assigned_driver_name'],
+    order['rider_name'],
+    order['driver_full_name'],
+    order['driver_display_name'],
+  ]);
+  if (direct.isNotEmpty) return direct;
+
+  final nestedDriverRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+  if (nestedDriverRaw is Map) {
+    final nested = Map<String, dynamic>.from(nestedDriverRaw);
+    final nestedDirect = _pickFirstNonEmpty([
+      nested['name'],
+      nested['full_name'],
+      nested['driver_name'],
+      nested['display_name'],
+    ]);
+    if (nestedDirect.isNotEmpty) return nestedDirect;
+    final fromParts = fullFromParts(nested);
+    if (fromParts.isNotEmpty) return fromParts;
+  }
+
+  final fromTopParts = fullFromParts(order);
+  if (fromTopParts.isNotEmpty) return fromTopParts;
+
+  return '';
+}
+
+String _extractDriverContactFromOrder(Map<String, dynamic> order) {
+  final direct = _pickFirstNonEmpty([
+    order['driver_phone'],
+    order['driver_contact'],
+    order['assigned_driver_phone'],
+    order['assigned_driver_contact'],
+    order['rider_phone'],
+    order['rider_contact'],
+  ]);
+  if (direct.isNotEmpty) return direct;
+
+  final nestedDriverRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+  if (nestedDriverRaw is Map) {
+    final nested = Map<String, dynamic>.from(nestedDriverRaw);
+    final nestedContact = _pickFirstNonEmpty([
+      nested['contact_no'],
+      nested['contact_number'],
+      nested['phone'],
+      nested['mobile'],
+      nested['mobile_number'],
+    ]);
+    if (nestedContact.isNotEmpty) return nestedContact;
+  }
+
+  return '';
+}
+
+String _extractDriverGroupKeyFromOrder(Map<String, dynamic> order, String fallbackName) {
+  final directId = _pickFirstNonEmpty([
+    order['driver_id'],
+    order['assigned_driver_id'],
+    order['rider_id'],
+  ]);
+  if (directId.isNotEmpty) return 'id:$directId';
+
+  final nestedDriverRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+  if (nestedDriverRaw is Map) {
+    final nested = Map<String, dynamic>.from(nestedDriverRaw);
+    final nestedId = _pickFirstNonEmpty([
+      nested['id'],
+      nested['driver_id'],
+      nested['user_id'],
+      nested['account_id'],
+    ]);
+    if (nestedId.isNotEmpty) return 'id:$nestedId';
+    final nestedPhone = _pickFirstNonEmpty([
+      nested['phone'],
+      nested['mobile'],
+      nested['contact_number'],
+    ]);
+    if (nestedPhone.isNotEmpty) return 'phone:$nestedPhone';
+  }
+
+  final fallback = fallbackName.trim().toLowerCase();
+  if (fallback.isNotEmpty) return 'name:$fallback';
+  return 'order:${order['id'] ?? ''}';
+}
+
+Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return [];
+  final uri = Uri.parse('${Auth.apiBaseUrl}/orders').replace(
+    queryParameters: {'status': 'all'},
+  );
+  final res = await http.get(
+    uri,
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  if (res.statusCode != 200 || data == null) return [];
+  final list = data['data'] as List<dynamic>? ?? [];
+  final grouped = <String, DriverOrderThread>{};
+
+  for (final raw in list.whereType<Map>()) {
+    final order = Map<String, dynamic>.from(raw);
+    final rawDriverId = (order['driver_id'] ?? '').toString().trim();
+    if (rawDriverId.isEmpty || rawDriverId == '0' || rawDriverId == 'null') {
+      // Skip orders without an assigned driver; they usually show generic "Driver".
+      continue;
+    }
+    final orderIdRaw = order['id'];
+    final orderId = orderIdRaw is int ? orderIdRaw : int.tryParse(orderIdRaw?.toString() ?? '');
+    if (orderId == null) continue;
+
+    var driverName = _extractDriverNameFromOrder(order);
+    if (driverName.isEmpty) driverName = 'Driver';
+    final driverContact = _extractDriverContactFromOrder(order);
+    final transactionId = (order['transaction_id'] ?? 'Order #$orderId').toString();
+    final orderLabel = (order['product_name'] ?? order['product_type'] ?? 'Order').toString();
+    final lastAt = _parseDateTimeMaybe(order['updated_at']) ??
+        _parseDateTimeMaybe(order['created_at']) ??
+        _parseDateTimeMaybe(order['delivery_date']);
+    final preview = _pickFirstNonEmpty([
+      order['latest_message'],
+      order['last_message'],
+      order['last_message_text'],
+      order['message_preview'],
+    ]);
+    final effectivePreview =
+        preview.isNotEmpty ? preview : 'No messages yet. Tap to start.';
+    final key = _extractDriverGroupKeyFromOrder(order, driverName);
+    final existing = grouped[key];
+    if (existing == null) {
+      grouped[key] = DriverOrderThread(
+        orderId: orderId,
+        relatedOrderIds: [orderId],
+        driverName: driverName,
+        driverContact: driverContact,
+        transactionId: transactionId,
+        orderLabel: orderLabel,
+        preview: effectivePreview,
+        lastAt: lastAt,
+      );
+      continue;
+    }
+
+    final mergedIds = <int>{...existing.relatedOrderIds, existing.orderId, orderId}.toList();
+    final existingAt = existing.lastAt;
+    final takeNewer = existingAt == null || (lastAt != null && lastAt.isAfter(existingAt));
+    grouped[key] = DriverOrderThread(
+      orderId: takeNewer ? orderId : existing.orderId,
+      relatedOrderIds: mergedIds,
+      driverName: existing.driverName.isNotEmpty ? existing.driverName : driverName,
+      driverContact: existing.driverContact.isNotEmpty ? existing.driverContact : driverContact,
+      transactionId: takeNewer ? transactionId : existing.transactionId,
+      orderLabel: takeNewer ? orderLabel : existing.orderLabel,
+      preview: takeNewer ? effectivePreview : existing.preview,
+      lastAt: takeNewer ? lastAt : existing.lastAt,
+    );
+  }
+
+  final threads = grouped.values.toList();
+  threads.sort((a, b) {
+    final aAt = a.lastAt;
+    final bAt = b.lastAt;
+    if (aAt == null && bAt == null) return b.orderId.compareTo(a.orderId);
+    if (aAt == null) return 1;
+    if (bAt == null) return -1;
+    return bAt.compareTo(aAt);
+  });
+
+  return threads;
+}
+
 String formatMessageTime(DateTime dt) {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
@@ -178,32 +518,59 @@ class _MessagesPageState extends State<MessagesPage> {
   ChatSummary? _chatSummary;
   bool _chatLoading = true;
   String? _chatError;
-
-  Timer? _summaryPollTimer;
+  List<DriverOrderThread> _driverThreads = [];
+  bool _driverLoading = true;
+  String? _driverError;
+  bool _chatRefreshInFlight = false;
+  bool _driverRefreshInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _loadChatSummary();
-    _startSummaryPolling();
+    _loadDriverThreads();
   }
 
   @override
   void dispose() {
-    _summaryPollTimer?.cancel();
     super.dispose();
   }
 
-  void _startSummaryPolling() {
-    _summaryPollTimer?.cancel();
-    _summaryPollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!mounted || selectedTab != 0) return;
-      _refreshChatSummarySilent();
-    });
+  bool _isSameSummary(ChatSummary? a, ChatSummary? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    if (a.unreadCount != b.unreadCount) return false;
+    final aLast = a.lastMessage;
+    final bLast = b.lastMessage;
+    if (aLast == null && bLast == null) return true;
+    if (aLast == null || bLast == null) return false;
+    return aLast.id == bLast.id &&
+        aLast.body == bLast.body &&
+        aLast.imageUrl == bLast.imageUrl &&
+        aLast.createdAt == bLast.createdAt;
+  }
+
+  bool _isSameDriverThreads(List<DriverOrderThread> a, List<DriverOrderThread> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (x.orderId != y.orderId ||
+          x.driverName != y.driverName ||
+          x.transactionId != y.transactionId ||
+          x.orderLabel != y.orderLabel ||
+          x.preview != y.preview ||
+          x.lastAt != y.lastAt) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Initial load: shows loading indicator.
   Future<void> _loadChatSummary() async {
+    if (_chatRefreshInFlight) return;
+    _chatRefreshInFlight = true;
     setState(() {
       _chatLoading = true;
       _chatError = null;
@@ -211,11 +578,17 @@ class _MessagesPageState extends State<MessagesPage> {
     try {
       final summary = await fetchChatSummary();
       if (mounted) {
-        setState(() {
-          _chatSummary = summary;
+        final changed = !_isSameSummary(_chatSummary, summary);
+        if (changed || _chatLoading || _chatError != null) {
+          setState(() {
+            _chatSummary = summary;
+            _chatLoading = false;
+            _chatError = null;
+          });
+        } else {
           _chatLoading = false;
           _chatError = null;
-        });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -224,21 +597,120 @@ class _MessagesPageState extends State<MessagesPage> {
           _chatError = e.toString();
         });
       }
+    } finally {
+      _chatRefreshInFlight = false;
     }
   }
 
   /// Real-time background refresh: no loading spinner, only updates data when changed.
   Future<void> _refreshChatSummarySilent() async {
+    if (_chatRefreshInFlight) return;
+    _chatRefreshInFlight = true;
     try {
       final summary = await fetchChatSummary();
       if (mounted) {
-        setState(() {
-          _chatSummary = summary;
-          _chatError = null;
-        });
+        final changed = !_isSameSummary(_chatSummary, summary);
+        if (changed || _chatError != null) {
+          setState(() {
+            _chatSummary = summary;
+            _chatError = null;
+          });
+        }
       }
     } catch (_) {
       // Keep previous state on silent refresh failure
+    } finally {
+      _chatRefreshInFlight = false;
+    }
+  }
+
+  Future<void> _loadDriverThreads() async {
+    if (_driverRefreshInFlight) return;
+    _driverRefreshInFlight = true;
+    setState(() {
+      _driverLoading = true;
+      _driverError = null;
+    });
+    try {
+      final threads = await fetchDriverOrderThreads();
+      if (mounted) {
+        final changed = !_isSameDriverThreads(_driverThreads, threads);
+        if (changed || _driverLoading || _driverError != null) {
+          setState(() {
+            _driverThreads = threads;
+            _driverLoading = false;
+            _driverError = null;
+          });
+        } else {
+          _driverLoading = false;
+          _driverError = null;
+        }
+      }
+      _hydrateDriverThreadLatestMessages();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _driverLoading = false;
+          _driverError = e.toString();
+        });
+      }
+    } finally {
+      _driverRefreshInFlight = false;
+    }
+  }
+
+  Future<void> _hydrateDriverThreadLatestMessages() async {
+    if (!mounted) return;
+    final current = List<DriverOrderThread>.from(_driverThreads);
+    if (current.isEmpty) return;
+
+    // Limit calls to keep the page responsive on large lists.
+    final targets = current.where((t) => t.orderId > 0).take(10).toList();
+    if (targets.isEmpty) return;
+    final latestByOrder = <int, OrderMessageItem>{};
+
+    await Future.wait(targets.map((t) async {
+      // Backend returns ascending by created_at, so fetch a page and take the last item as newest.
+      final latest = await fetchOrderMessages(orderId: t.orderId, perPage: 100);
+      if (latest != null && latest.isNotEmpty) {
+        latestByOrder[t.orderId] = latest.last;
+      }
+    }));
+
+    if (!mounted || latestByOrder.isEmpty) return;
+    final updated = current.map((t) {
+      final latest = latestByOrder[t.orderId];
+      if (latest == null) return t;
+      final msg = latest.message.trim();
+      return t.copyWith(
+        preview: msg.isNotEmpty ? msg : (t.preview ?? 'No messages yet. Tap to start.'),
+        lastAt: latest.createdAt ?? t.lastAt,
+      );
+    }).toList();
+
+    final changed = !_isSameDriverThreads(_driverThreads, updated);
+    if (changed && mounted) {
+      setState(() => _driverThreads = updated);
+    }
+  }
+
+  Future<void> _refreshDriverThreadsSilent() async {
+    if (_driverRefreshInFlight) return;
+    _driverRefreshInFlight = true;
+    try {
+      final threads = await fetchDriverOrderThreads();
+      if (mounted) {
+        final changed = !_isSameDriverThreads(_driverThreads, threads);
+        if (changed || _driverError != null) {
+          setState(() {
+            _driverThreads = threads;
+            _driverError = null;
+          });
+        }
+      }
+    } catch (_) {
+    } finally {
+      _driverRefreshInFlight = false;
     }
   }
 
@@ -356,34 +828,6 @@ class _MessagesPageState extends State<MessagesPage> {
                             ),
                           ),
 
-                          // Positioned Badge (unread count from API)
-                          if ((_chatSummary?.unreadCount ?? 0) > 0)
-                            Positioned(
-                              right: -12,
-                              child: Container(
-                                width: 19,
-                                height: 19,
-                                decoration: BoxDecoration(
-                                  color: selectedTab == 1
-                                      ? Colors.white
-                                      : const Color(0xFFE3001B),
-                                  shape: BoxShape.circle,
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  (_chatSummary!.unreadCount > 99)
-                                      ? '99+'
-                                      : '${_chatSummary!.unreadCount}',
-                                  style: TextStyle(
-                                    color: selectedTab == 1
-                                        ? const Color(0xFFE3001B)
-                                        : Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                     ),
@@ -400,7 +844,10 @@ class _MessagesPageState extends State<MessagesPage> {
               child: RefreshIndicator(
                 onRefresh: () async {
                   if (selectedTab == 0) {
-                    await _loadChatSummary();
+                    await Future.wait<void>([
+                      _loadChatSummary(),
+                      _loadDriverThreads(),
+                    ]);
                   }
                 },
                 child: ListView(
@@ -433,27 +880,100 @@ class _MessagesPageState extends State<MessagesPage> {
                           ),
                         )
                       else
-                        GestureDetector(
-                          onTap: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const ChatPage(),
+                        if (_chatSummary?.lastMessage != null ||
+                            (_chatSummary?.unreadCount ?? 0) > 0)
+                          GestureDetector(
+                            onTap: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const ChatPage(),
+                                ),
+                              );
+                              if (mounted) _refreshChatSummarySilent();
+                            },
+                            child: messageCard(
+                              icon: Icons.support_agent,
+                              name: 'Chat with H&R Ice Cream',
+                              message: _chatSummary?.lastMessage?.body ??
+                                  (((_chatSummary?.unreadCount ?? 0) > 0)
+                                      ? 'You have new messages.'
+                                      : 'Image'),
+                              time: _chatSummary?.lastMessage != null
+                                  ? formatMessageTimeAgo(
+                                      _chatSummary!.lastMessage!.createdAt,
+                                    )
+                                  : '',
+                            ),
+                          ),
+                      const SizedBox(height: 10),
+                      if (_driverLoading)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                        )
+                      else if (_driverError != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Column(
+                            children: [
+                              Text(
+                                _driverError!,
+                                style: const TextStyle(color: Colors.red),
+                                textAlign: TextAlign.center,
                               ),
-                            );
-                            if (mounted) _refreshChatSummarySilent();
-                          },
-                          child: messageCard(
-                            icon: Icons.support_agent,
-                            name: 'Chat with H&R Ice Cream',
-                            message: _chatSummary?.lastMessage != null
-                                ? (_chatSummary!.lastMessage!.body ?? 'Image')
-                                : 'No messages yet. Tap to start.',
-                            time: _chatSummary?.lastMessage != null
-                                ? formatMessageTimeAgo(_chatSummary!.lastMessage!.createdAt)
-                                : '',
+                              const SizedBox(height: 8),
+                              TextButton(
+                                onPressed: _loadDriverThreads,
+                                child: const Text('Retry Driver Chats'),
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (_driverThreads.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 6),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Driver Chats',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF1C1B1F),
+                              ),
+                            ),
                           ),
                         ),
+                        ..._driverThreads.map((thread) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: GestureDetector(
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => DriverOrderChatPage(
+                                        orderId: thread.orderId,
+                                        relatedOrderIds: thread.relatedOrderIds,
+                                        driverName: thread.driverName,
+                                        driverContact: thread.driverContact,
+                                        orderLabel: thread.orderLabel,
+                                      ),
+                                    ),
+                                  );
+                                  if (mounted) _refreshDriverThreadsSilent();
+                                },
+                                child: messageCard(
+                                  icon: Icons.person,
+                                  name: thread.driverName,
+                                  message: thread.preview ?? 'No messages yet. Tap to start.',
+                                  time: thread.lastAt != null
+                                      ? formatMessageTimeAgo(thread.lastAt!)
+                                      : '',
+                                ),
+                              ),
+                            )),
+                      ],
                       const SizedBox(height: 10),
                     ] else ...[
                     notificationCard(
@@ -931,7 +1451,6 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const double avatarRadius = 22;
-  static const Duration _pollInterval = Duration(seconds: 2);
 
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -940,8 +1459,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   bool _sending = false;
-  Timer? _pollTimer;
-  bool _isAppInForeground = true;
 
   @override
   void initState() {
@@ -949,13 +1466,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _loadMessages();
     markChatRead();
-    _startPolling();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _pollTimer?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -964,43 +1479,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    final inForeground = state == AppLifecycleState.resumed;
-    if (_isAppInForeground != inForeground) {
-      _isAppInForeground = inForeground;
-      if (inForeground) {
-        _refreshMessagesInBackground();
-        _startPolling();
-      } else {
-        _pollTimer?.cancel();
-      }
-    }
-  }
-
-  void _startPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(_pollInterval, (_) {
-      if (_isAppInForeground) _refreshMessagesInBackground();
-    });
-  }
-
-  /// Refetch messages in background (no loading spinner). Update list if changed; scroll to bottom if new messages and user was near bottom.
-  Future<void> _refreshMessagesInBackground() async {
-    if (!mounted || _loading || _sending) return;
-    try {
-      final list = await fetchChatMessages(perPage: 100);
-      if (!mounted || list == null) return;
-      final prevCount = _messages.length;
-      final prevLastId = _messages.isNotEmpty ? _messages.last.id : 0;
-      final newCount = list.length;
-      final newLastId = list.isNotEmpty ? list.last.id : 0;
-      if (newCount != prevCount || newLastId != prevLastId) {
-        final wasNearBottom = _scrollController.hasClients &&
-            (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 80);
-        setState(() => _messages = list);
-        if (wasNearBottom) _scrollToBottom();
-      }
-    } catch (_) {
-      // ignore errors in background poll
+    if (state == AppLifecycleState.resumed) {
+      _loadMessages();
     }
   }
 
@@ -1358,6 +1838,422 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                 style: const TextStyle(
                   fontSize: 11,
                   color: Color(0xFF1C1B1F),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DriverOrderChatPage extends StatefulWidget {
+  final int orderId;
+  final List<int>? relatedOrderIds;
+  final String driverName;
+  final String driverContact;
+  final String orderLabel;
+
+  const DriverOrderChatPage({
+    super.key,
+    required this.orderId,
+    this.relatedOrderIds,
+    required this.driverName,
+    this.driverContact = '',
+    required this.orderLabel,
+  });
+
+  @override
+  State<DriverOrderChatPage> createState() => _DriverOrderChatPageState();
+}
+
+class _DriverOrderChatPageState extends State<DriverOrderChatPage>
+    with WidgetsBindingObserver {
+  static const double avatarRadius = 22;
+
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  List<OrderMessageItem> _messages = [];
+  bool _loading = true;
+  String? _error;
+  bool _sending = false;
+  int _activeOrderId = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _activeOrderId = widget.orderId;
+    _loadMessages();
+    _markAllRelatedMessagesRead();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _loadMessages();
+    }
+  }
+
+  List<int> get _orderIds {
+    final raw = widget.relatedOrderIds ?? <int>[widget.orderId];
+    final set = <int>{};
+    for (final id in raw) {
+      if (id > 0) set.add(id);
+    }
+    if (set.isEmpty) set.add(widget.orderId);
+    return set.toList();
+  }
+
+  Future<void> _markAllRelatedMessagesRead() async {
+    for (final id in _orderIds) {
+      await markOrderMessagesRead(orderId: id);
+    }
+  }
+
+  Future<List<OrderMessageItem>> _fetchMessagesForOrder(int orderId) async {
+    final list = await fetchOrderMessages(orderId: orderId, perPage: 100);
+    return list ?? <OrderMessageItem>[];
+  }
+
+  List<OrderMessageItem> _sortMergedMessages(List<OrderMessageItem> input) {
+    input.sort((a, b) {
+      final aAt = a.createdAt;
+      final bAt = b.createdAt;
+      if (aAt == null && bAt == null) return a.id.compareTo(b.id);
+      if (aAt == null) return -1;
+      if (bAt == null) return 1;
+      final cmp = aAt.compareTo(bAt);
+      if (cmp != 0) return cmp;
+      return a.id.compareTo(b.id);
+    });
+    return input;
+  }
+
+  Future<void> _loadMessages() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final merged = <OrderMessageItem>[];
+      for (final id in _orderIds) {
+        merged.addAll(await _fetchMessagesForOrder(id));
+      }
+      final list = _sortMergedMessages(merged);
+      if (mounted) {
+        setState(() {
+          _messages = list;
+          if (list.isNotEmpty) {
+            final latest = list.last;
+            _activeOrderId = latest.orderId > 0 ? latest.orderId : widget.orderId;
+          }
+          _loading = false;
+          _error = null;
+        });
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _sending) return;
+    _controller.clear();
+    setState(() => _sending = true);
+    try {
+      final sendOrderId = _activeOrderId > 0 ? _activeOrderId : widget.orderId;
+      final sent = await sendOrderMessage(orderId: sendOrderId, message: text);
+      if (mounted && sent != null) {
+        setState(() {
+          _messages = [..._messages, sent];
+          _sending = false;
+        });
+        _scrollToBottom();
+      } else {
+        if (mounted) setState(() => _sending = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Widget _buildMessageBubble(OrderMessageItem m) {
+    final isCustomer = m.isMine || m.senderType == _senderCustomer;
+    final timeStr = formatMessageTime(m.createdAt ?? DateTime.now());
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Align(
+        alignment: isCustomer ? Alignment.centerRight : Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: isCustomer ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (!isCustomer) ...[
+                  const CircleAvatar(
+                    radius: avatarRadius,
+                    backgroundColor: Color(0xFFFFE5E5),
+                    child: Icon(
+                      Symbols.person,
+                      color: Color(0xFFE3001B),
+                      size: 21,
+                      fill: 1,
+                      weight: 700,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isCustomer ? const Color(0xFFE3001B) : const Color(0xFFEAEAEA),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      m.message,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w400,
+                        color: isCustomer ? Colors.white : Colors.black,
+                      ),
+                    ),
+                  ),
+                ),
+                if (isCustomer) ...[
+                  const SizedBox(width: 10),
+                  const CircleAvatar(
+                    radius: avatarRadius,
+                    backgroundColor: Color(0xFFFFE5E5),
+                    child: Icon(
+                      Symbols.person,
+                      color: Color(0xFFE3001B),
+                      size: 21,
+                      fill: 1,
+                      weight: 700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: EdgeInsets.only(
+                left: isCustomer ? 0 : (avatarRadius * 2) + 10,
+                right: isCustomer ? (avatarRadius * 2) + 10 : 0,
+              ),
+              child: Text(
+                timeStr,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF1C1B1F)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFFAFAFA),
+      body: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 15),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              child: Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 3),
+                    child: IconButton(
+                      icon: const Icon(
+                        Symbols.arrow_back_ios,
+                        size: 22,
+                        weight: 400,
+                        color: Colors.black,
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ),
+                  const CircleAvatar(
+                    radius: avatarRadius,
+                    backgroundColor: Color(0xFFFFE5E5),
+                    child: Icon(
+                      Symbols.person,
+                      color: Color(0xFFE3001B),
+                      size: 21,
+                      fill: 1,
+                      weight: 700,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.driverName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          widget.driverContact.isNotEmpty
+                              ? widget.driverContact
+                              : widget.orderLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.grey, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 30),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: _loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : _error != null
+                              ? Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _error!,
+                                        style: const TextStyle(color: Colors.red),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      const SizedBox(height: 12),
+                                      TextButton(
+                                        onPressed: _loadMessages,
+                                        child: const Text('Retry'),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : RefreshIndicator(
+                                  onRefresh: () async {
+                                    await _loadMessages();
+                                  },
+                                  child: ListView.builder(
+                                    physics: const AlwaysScrollableScrollPhysics(),
+                                    controller: _scrollController,
+                                    itemCount: _messages.length,
+                                    itemBuilder: (context, index) {
+                                      final m = _messages[index];
+                                      return _buildMessageBubble(m);
+                                    },
+                                  ),
+                                ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _controller,
+                              style: const TextStyle(fontSize: 15),
+                              decoration: InputDecoration(
+                                hintText: 'Message',
+                                hintStyle: const TextStyle(
+                                  color: Color(0xFF464646),
+                                  fontSize: 15,
+                                ),
+                                filled: true,
+                                fillColor: const Color(0xFFF1F1F1),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 14,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide.none,
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              onSubmitted: (_) => _sendMessage(),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          GestureDetector(
+                            onTap: _sending ? null : _sendMessage,
+                            child: CircleAvatar(
+                              radius: 24,
+                              backgroundColor: _sending
+                                  ? Colors.grey
+                                  : const Color(0xFFE3001B),
+                              child: _sending
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Symbols.send,
+                                      color: Colors.white,
+                                      size: 22,
+                                      weight: 600,
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

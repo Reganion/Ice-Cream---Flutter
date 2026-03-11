@@ -1,11 +1,14 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/delivery/cd_photo.dart';
+import 'package:ice_cream/driver/message/messages.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class CompleteDeliveryPage extends StatefulWidget {
   final int? shipmentId;
@@ -158,6 +161,134 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
         ),
       ),
     );
+  }
+
+  String _normalizePhone(String value) {
+    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return '';
+    return digits.startsWith('63') ? digits.substring(2) : digits;
+  }
+
+  String _normalizeName(String value) => value.trim().toLowerCase();
+
+  Future<List<Map<String, dynamic>>> _fetchShipmentsTabForChat(
+    String tab,
+    String token,
+  ) async {
+    final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments')
+        .replace(queryParameters: {'tab': tab});
+    final res = await http.get(
+      uri,
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200 || data['success'] != true || data['shipments'] is! List) {
+      return <Map<String, dynamic>>[];
+    }
+    return (data['shipments'] as List)
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  Future<List<int>> _relatedShipmentIdsForCustomer({
+    required String token,
+    required int currentId,
+    required String customerName,
+    required String customerPhone,
+  }) async {
+    final all = <Map<String, dynamic>>[];
+    for (final tab in const ['incoming', 'accepted', 'completed']) {
+      all.addAll(await _fetchShipmentsTabForChat(tab, token));
+    }
+    final currentPhone = _normalizePhone(customerPhone);
+    final currentName = _normalizeName(customerName);
+    final ids = <int>{currentId};
+    for (final s in all) {
+      final rawId = s['id'];
+      final id = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
+      if (id == null) continue;
+      final phone = _normalizePhone((s['customer_phone'] ?? '').toString());
+      final name = _normalizeName((s['customer_name'] ?? '').toString());
+      final sameByPhone = currentPhone.isNotEmpty && phone == currentPhone;
+      final sameByName = currentPhone.isEmpty && currentName.isNotEmpty && name == currentName;
+      if (sameByPhone || sameByName) ids.add(id);
+    }
+    return ids.toList();
+  }
+
+  Future<void> _openChatForCustomer() async {
+    final id = _shipmentId;
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shipment ID is missing.')),
+      );
+      return;
+    }
+    final token = await _token();
+    if (token == null || token.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Missing driver session. Please login again.')),
+      );
+      return;
+    }
+    final customerName = (_shipment?['customer_name'] ?? 'Customer').toString();
+    final customerPhone = (_shipment?['customer_phone'] ?? '').toString();
+    final relatedIds = await _relatedShipmentIdsForCustomer(
+      token: token,
+      currentId: id,
+      customerName: customerName,
+      customerPhone: customerPhone,
+    );
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          shipmentId: id,
+          relatedShipmentIds: relatedIds,
+          customerName: customerName,
+          customerPhone: customerPhone,
+        ),
+      ),
+    );
+  }
+
+  String _phoneDigits(String value) => value.replaceAll(RegExp(r'[^0-9+]'), '');
+
+  Future<void> _openCall() async {
+    final raw = (_shipment?['customer_phone'] ?? '').toString().trim();
+    final cleaned = _phoneDigits(raw);
+    if (cleaned.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Customer phone number is unavailable.')),
+      );
+      return;
+    }
+    try {
+      final uri = Uri.parse('tel:$cleaned');
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open phone dialer.')),
+        );
+      }
+    } on MissingPluginException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Phone plugin not ready. Please restart app.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open phone dialer.')),
+      );
+    }
   }
 
   @override
@@ -433,9 +564,15 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                           ),
                         ),
                         SizedBox(width: isCompact ? 8 : 10),
-                        const _CompleteActionIconButton(icon: Symbols.chat_bubble),
+                        _CompleteActionIconButton(
+                          icon: Symbols.chat_bubble,
+                          onTap: _openChatForCustomer,
+                        ),
                         SizedBox(width: isCompact ? 8 : 10),
-                        const _CompleteActionIconButton(icon: Symbols.call),
+                        _CompleteActionIconButton(
+                          icon: Symbols.call,
+                          onTap: _openCall,
+                        ),
                       ],
                     ),
 
@@ -711,8 +848,12 @@ class _CompleteOrderRow extends StatelessWidget {
 
 class _CompleteActionIconButton extends StatelessWidget {
   final IconData icon;
+  final VoidCallback? onTap;
 
-  const _CompleteActionIconButton({required this.icon});
+  const _CompleteActionIconButton({
+    required this.icon,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -724,7 +865,7 @@ class _CompleteActionIconButton extends StatelessWidget {
         side: BorderSide(color: Colors.black, width: 1),
       ),
       child: InkWell(
-        onTap: () {},
+        onTap: onTap,
         customBorder: const CircleBorder(),
         child: SizedBox(
           width: isCompact ? 44 : 48,

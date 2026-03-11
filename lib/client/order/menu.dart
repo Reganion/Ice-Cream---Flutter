@@ -2310,6 +2310,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
     }
     final address = _checkoutAddress;
     final fullAddress = (address?['fullAddress'] ?? '').toString().trim();
+    final addressFirstName = (address?['firstName'] ?? '').toString().trim();
+    final addressLastName = (address?['lastName'] ?? '').toString().trim();
+    final addressContact = (address?['contact'] ?? '').toString().trim();
     if (fullAddress.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -2354,6 +2357,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
             'delivery_time': deliveryTime,
             'delivery_address': fullAddress,
             'amount': item.lineTotal,
+            'quantity': item.quantity,
+            'qty': item.quantity,
+            'address_first_name': addressFirstName,
+            'address_last_name': addressLastName,
+            'address_contact': addressContact,
             'payment_method': paymentMethod,
           }),
         );

@@ -26,6 +26,23 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   String? _error;
 
   static const List<String> _statusQuery = ['all', 'completed', 'processing', 'cancelled'];
+  static const Set<String> _completedStatuses = {
+    'completed',
+    'delivered',
+    'walk-in',
+    'walk_in',
+    'walk in',
+    'walkin',
+  };
+  static const Set<String> _processingStatuses = {
+    'pending',
+    'preparing',
+    'assigned',
+  };
+  static const Set<String> _cancelledStatuses = {
+    'cancelled',
+    'canceled',
+  };
 
   @override
   void initState() {
@@ -67,8 +84,10 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         return;
       }
       final list = body?['data'] as List<dynamic>? ?? [];
+      final fetched = list.map((e) => OrderRecord.fromJson(e as Map<String, dynamic>)).toList();
+      final filtered = _applyTabStatusFilter(fetched, selectedTab);
       setState(() {
-        _orders = list.map((e) => OrderRecord.fromJson(e as Map<String, dynamic>)).toList();
+        _orders = filtered;
         _loading = false;
         _error = null;
       });
@@ -81,6 +100,43 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         });
       }
     }
+  }
+
+  List<OrderRecord> _applyTabStatusFilter(List<OrderRecord> orders, int tabIndex) {
+    if (tabIndex <= 0) return orders;
+
+    return orders.where((order) {
+      final status = _normalizeStatus(order.status);
+      switch (tabIndex) {
+        case 1:
+          return _completedStatuses.contains(status);
+        case 2:
+          return _processingStatuses.contains(status);
+        case 3:
+          return _cancelledStatuses.contains(status);
+        default:
+          return true;
+      }
+    }).toList();
+  }
+
+  String _normalizeStatus(String value) {
+    return value.trim().toLowerCase().replaceAll('_', ' ');
+  }
+
+  bool _isCompletedStatus(String status) {
+    final normalized = _normalizeStatus(status);
+    return _completedStatuses.contains(normalized);
+  }
+
+  bool _isProcessingStatus(String status) {
+    final normalized = _normalizeStatus(status);
+    return _processingStatuses.contains(normalized);
+  }
+
+  bool _isCancelledStatus(String status) {
+    final normalized = _normalizeStatus(status);
+    return _cancelledStatuses.contains(normalized);
   }
 
   @override
@@ -208,9 +264,9 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     return _orders
         .map((order) => orderCard(
               order: order,
-              isCompletedTab: selectedTab == 1 || (selectedTab == 0 && order.isCompleted),
-              isProcessingTab: selectedTab == 2 || (selectedTab == 0 && order.isProcessing),
-              isCancelledTab: selectedTab == 3 || (selectedTab == 0 && order.isCancelled),
+              isCompletedTab: selectedTab == 1 || (selectedTab == 0 && _isCompletedStatus(order.status)),
+              isProcessingTab: selectedTab == 2 || (selectedTab == 0 && _isProcessingStatus(order.status)),
+              isCancelledTab: selectedTab == 3 || (selectedTab == 0 && _isCancelledStatus(order.status)),
               onOrderCancelled: _fetchOrders,
             ))
         .toList();
@@ -397,7 +453,7 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                                     orderId: order.id,
                                     imageAsset: imgUrl,
                                     itemName: name,
-                                    status: order.status == 'walk_in' ? 'Walk-in' : 'Delivered',
+                                    status: _formatRateStatusLabel(order.status),
                                     price: price,
                                     dateTimeLabel: order.createdAtFormatted ?? '—',
                                   ),
@@ -482,6 +538,14 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         ],
       ),
     );
+  }
+
+  String _formatRateStatusLabel(String status) {
+    final normalized = _normalizeStatus(status);
+    if (normalized == 'walk in' || normalized == 'walkin' || normalized == 'walk-in') {
+      return 'Walk-in';
+    }
+    return 'Delivered';
   }
 
   // ---------------- BOTTOM NAV ----------------

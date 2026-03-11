@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/home_page.dart';
-import 'package:ice_cream/client/messages/no_notifications.dart';
+import 'package:ice_cream/client/messages/messages.dart';
 import 'package:ice_cream/client/order/all.dart';
 import 'package:ice_cream/client/order/cart.dart';
 import 'package:ice_cream/client/order/menu.dart';
@@ -453,7 +453,7 @@ class _FavoritePageState extends State<FavoritePage> {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const NoNotificationsPage()),
+                  MaterialPageRoute(builder: (_) => const MessagesPage()),
                 );
               },
             ),
