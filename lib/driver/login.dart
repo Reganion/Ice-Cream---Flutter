@@ -50,10 +50,36 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _passwordErrorText;
 
   @override
+  void initState() {
+    super.initState();
+    _markDriverOffDutyIfOnLoginScreen();
+  }
+
+  @override
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _markDriverOffDutyIfOnLoginScreen() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('driver_token');
+    if (token == null || token.isEmpty) return;
+
+    try {
+      await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/logout'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+    } catch (_) {}
+
+    await prefs.remove('driver_token');
+    await prefs.remove('driver_profile');
+    await prefs.remove('driver_password');
   }
 
   Future<void> _handleLogin() async {
