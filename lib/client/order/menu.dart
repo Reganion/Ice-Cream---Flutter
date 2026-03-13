@@ -7,6 +7,7 @@ import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/order/cart.dart';
 import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/order/manage_address.dart';
+import 'package:ice_cream/client/order/qrph.dart';
 import 'package:ice_cream/client/profile/profile.dart';
 import 'package:intl/intl.dart';
 
@@ -2294,6 +2295,127 @@ class _CheckoutPageState extends State<CheckoutPage> {
       selectedDownPaymentPercent != null &&
       selectedPayment.isNotEmpty;
 
+  Future<void> _startDownpaymentFlow() async {
+    final items = widget.cartItems;
+    if (items == null || items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No items to order.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final address = _checkoutAddress;
+    final fullAddress = (address?['fullAddress'] ?? '').toString().trim();
+    if (fullAddress.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please set a delivery address.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to place an order.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    final deliveryDate = DateFormat('yyyy-MM-dd').format(selectedDate!);
+    final deliveryTime =
+        '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}';
+    final percent = selectedDownPaymentPercent ?? 1.0;
+    final subtotal = widget.cartSubtotal ?? 0;
+    final first = items.first;
+
+    setState(() => _placingOrder = true);
+    try {
+      final res = await http.post(
+        Uri.parse('$base/orders/downpayment'),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'product_name': first.name,
+          'product_type': first.category.isNotEmpty ? first.category : 'Plain Flavors',
+          'gallon_size': first.size,
+          'delivery_date': deliveryDate,
+          'delivery_time': deliveryTime,
+          'delivery_address': fullAddress,
+          'amount': subtotal,
+          'quantity': first.quantity,
+          'qty': first.quantity,
+          'payment_method': 'Gcash',
+          'downpayment_percent': percent,
+        }),
+      );
+      if (!mounted) return;
+      setState(() => _placingOrder = false);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>?;
+        final message = body?['message'] as String? ?? 'Failed to initialize downpayment.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        );
+        return;
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      final data = body?['data'] as Map<String, dynamic>?;
+      if (data == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Missing payment data from server.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final invoiceId = data['invoice_id'];
+      final orderId = data['order_id'];
+      final qrUrl = data['qr_image_url'] as String?;
+      final downAmount = (data['downpayment_amount'] as num?)?.toDouble() ?? 0.0;
+      if (qrUrl == null || invoiceId == null || orderId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid payment response from server.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => QrphPage(
+            invoiceId: invoiceId is int ? invoiceId : int.parse(invoiceId.toString()),
+            orderId: orderId is int ? orderId : int.parse(orderId.toString()),
+            qrImageUrl: qrUrl,
+            downpaymentAmount: downAmount,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _placingOrder = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not initialize downpayment: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   /// Sends only needed order details to backend, then redirects to home with success alert.
   /// Backend creates order(s) and notifies admin.
   Future<void> _placeOrder() async {
@@ -2461,7 +2583,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
               );
               return;
             }
-            _placeOrder();
+            if (selectedPayment == 'cod') {
+              _placeOrder();
+            } else {
+              _startDownpaymentFlow();
+            }
           },
           child: AnimatedOpacity(
             opacity: _canPlaceOrder && !_placingOrder ? 1 : 0.5,
