@@ -99,10 +99,17 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (!mounted) return;
       if (res.statusCode == 200 && data['success'] == true && data['shipment'] is Map) {
+        final map = Map<String, dynamic>.from(data['shipment'] as Map);
         setState(() {
-          _shipment = Map<String, dynamic>.from(data['shipment'] as Map);
+          _shipment = map;
           _loading = false;
           _error = '';
+          final bal = map['balance'];
+          if (bal != null) {
+            _receivedAmountController.text =
+                (bal is num ? bal.toDouble() : double.tryParse(bal.toString()) ?? 0)
+                    .toString();
+          }
         });
       } else {
         setState(() {
@@ -117,6 +124,20 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
         _error = 'Could not load shipment. Check connection.';
       });
     }
+  }
+
+  /// Delivery date text for the header, matching design ("13 Mar 2026").
+  /// Prefer explicit delivered_date from API; otherwise, strip time from expected_on.
+  String get _deliveryDateText {
+    final delivered = (_shipment?['delivered_date'] ?? '').toString().trim();
+    if (delivered.isNotEmpty) return delivered;
+    final expected = (_shipment?['expected_on'] ?? '').toString().trim();
+    if (expected.isEmpty) return '—';
+    final commaIndex = expected.indexOf(',');
+    if (commaIndex > 0) {
+      return expected.substring(0, commaIndex).trim();
+    }
+    return expected;
   }
 
   Future<void> _takePhoto() async {
@@ -172,6 +193,14 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
       return;
     }
 
+    final paymentMethod = _paymentMethodValue();
+    if (paymentMethod.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Payment method is required.')),
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
     try {
       final token = await _token();
@@ -190,10 +219,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
       req.headers['Accept'] = 'application/json';
       req.headers['Authorization'] = 'Bearer $token';
       req.fields['received_amount'] = amount.toString();
-      final paymentMethod = _paymentMethodValue();
-      if (paymentMethod.isNotEmpty) {
-        req.fields['payment_method'] = paymentMethod;
-      }
+      req.fields['payment_method'] = paymentMethod;
       req.files.add(await http.MultipartFile.fromPath('proof_photo', _photoPath!));
 
       final streamed = await req.send();
@@ -296,7 +322,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
             Row(
               children: [
                 _buildLabelValue(
-                  (_shipment?['expected_on'] ?? '—').toString(),
+                  _deliveryDateText,
                   'Delivery date',
                 ),
                 const SizedBox(width: 16),
@@ -426,8 +452,14 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                     'Cost:',
                     _fmtMoney(_shipment?['cost_text'] ?? _shipment?['cost']),
                   ),
-                  _buildOrderRow('Down Payment:', '—'),
-                  _buildOrderRow('Balance:', '—'),
+                  _buildOrderRow(
+                    'Down Payment:',
+                    _fmtMoney(_shipment?['downpayment']),
+                  ),
+                  _buildOrderRow(
+                    'Balance:',
+                    _fmtMoney(_shipment?['balance']),
+                  ),
                   _buildOrderRow(
                     'Customer Number:',
                     (_shipment?['customer_phone'] ?? '—').toString(),
@@ -452,6 +484,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                 Expanded(
                   child: TextField(
                     controller: _receivedAmountController,
+                    readOnly: true,
                     decoration: InputDecoration(
                       hintText: 'Enter amount',
                       hintStyle: const TextStyle(
@@ -597,8 +630,7 @@ class _CompleteDeliveryPhotoPageState extends State<CompleteDeliveryPhotoPage> {
                 ),
               ],
             ),
-                    const SizedBox(height: 8),
-                    const Spacer(),
+            const SizedBox(height: 17),
 
                     // Submit button (green) – onTap shows CompleteDeliverySuccessPage
                     SizedBox(

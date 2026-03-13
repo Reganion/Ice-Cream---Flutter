@@ -634,11 +634,17 @@ class _CompleteDeliveryPageState extends State<CompleteDeliveryPage> {
                             value: (_shipment?['order_type'] ?? '—').toString(),
                           ),
                           _CompleteOrderRow(
-                            label: 'Cost:',
+                            label: 'Total Amount:',
                             value: _fmtMoney(_shipment?['cost_text'] ?? _shipment?['cost']),
                           ),
-                          const _CompleteOrderRow(label: 'Down Payment:', value: '—'),
-                          const _CompleteOrderRow(label: 'Balance:', value: '—'),
+                          _CompleteOrderRow(
+                            label: 'Down Payment:',
+                            value: _fmtMoney(_shipment?['downpayment']),
+                          ),
+                          _CompleteOrderRow(
+                            label: 'Balance:',
+                            value: _fmtMoney(_shipment?['balance']),
+                          ),
                           _CompleteOrderRow(
                             label: 'Customer Number:',
                             value: (_shipment?['customer_phone'] ?? '—').toString(),

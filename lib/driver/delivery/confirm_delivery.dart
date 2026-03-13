@@ -690,11 +690,17 @@ DraggableScrollableSheet(
                             value: (_shipment?['order_type'] ?? '—').toString(),
                           ),
                           _OrderRow(
-                            label: 'Cost:',
+                            label: 'Total Amount:',
                             value: _fmtMoney(_shipment?['cost_text'] ?? _shipment?['cost']),
                           ),
-                          const _OrderRow(label: 'Down Payment:', value: '—'),
-                          const _OrderRow(label: 'Balance:', value: '—'),
+                          _OrderRow(
+                            label: 'Down Payment:',
+                            value: _fmtMoney(_shipment?['downpayment']),
+                          ),
+                          _OrderRow(
+                            label: 'Balance:',
+                            value: _fmtMoney(_shipment?['balance']),
+                          ),
                           _OrderRow(
                             label: 'Customer Number:',
                             value: (_shipment?['customer_phone'] ?? '—').toString(),
