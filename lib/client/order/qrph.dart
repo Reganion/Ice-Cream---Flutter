@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -5,25 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/home_page.dart';
+import 'package:ice_cream/client/order/payment_success.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 /// QRPH downpayment screen.
 /// - Shown after Place Order when payment method is Gcash/QRPH.
-/// - Back arrow: returns to Place Order (previous screen).
-/// - X/Close: cancels downpayment via API, order becomes cancelled, then goes Home.
-/// - "I have paid" button: checks PayMongo status; if paid, order becomes pending & user goes Home.
+/// - Back arrow: marks invoice as failed via cancel API, then returns to Place Order (user can update details and place again).
+/// - X/Close: cancels downpayment via API, then goes Home.
+/// - Status is polled every few seconds; when paid, success is shown and user goes Home (no button press needed).
+/// - "I have paid" button: optional immediate check.
 class QrphPage extends StatefulWidget {
   const QrphPage({
     super.key,
     required this.invoiceId,
-    required this.orderId,
+    this.orderId,
     required this.qrImageUrl,
     required this.downpaymentAmount,
   });
 
   final int invoiceId;
-  final int orderId;
+  /// Null until payment succeeds; backend creates order only after downpayment is paid.
+  final int? orderId;
   final String qrImageUrl;
   final double downpaymentAmount;
 
@@ -34,6 +38,78 @@ class QrphPage extends StatefulWidget {
 class _QrphPageState extends State<QrphPage> {
   bool _checkingStatus = false;
   bool _cancelling = false;
+  Timer? _pollTimer;
+  bool _alreadyHandledPaid = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startPolling();
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    super.dispose();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => _pollStatus());
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  /// Background poll: only shows UI when paid or failed; pending does nothing.
+  Future<void> _pollStatus() async {
+    if (_alreadyHandledPaid || !mounted) return;
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) return;
+    final base = Auth.apiBaseUrl;
+    try {
+      final res = await http.get(
+        Uri.parse('$base/orders/downpayment/status/${widget.invoiceId}'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (!mounted || _alreadyHandledPaid) return;
+      if (res.statusCode != 200) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (body['data'] as Map?) ?? {};
+      final invoiceStatus = (data['invoice_status'] ?? '').toString();
+      final orderStatus = (data['order_status'] ?? '').toString();
+      final paymentStatus = (data['payment_status'] ?? '').toString();
+
+      if (invoiceStatus == 'paid') {
+        _alreadyHandledPaid = true;
+        _stopPolling();
+        if (!mounted) return;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const PaymentSuccessPage()),
+          (route) => false,
+        );
+      } else if (invoiceStatus == 'failed' || orderStatus == 'cancelled' || paymentStatus == 'failed') {
+        _stopPolling();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Downpayment failed or was cancelled. Please try again.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } catch (_) {
+      // ignore errors in background poll
+    }
+  }
 
   Uint8List _decodeQrData(String src) {
     final parts = src.split(',');
@@ -80,32 +156,17 @@ class _QrphPageState extends State<QrphPage> {
       final orderStatus = (data['order_status'] ?? '').toString();
       final paymentStatus = (data['payment_status'] ?? '').toString();
 
-      if (invoiceStatus == 'paid' && orderStatus == 'pending') {
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: const Text('Downpayment received'),
-            content: const Text(
-              'Your downpayment was successful. Your order is now pending confirmation.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
+      if (invoiceStatus == 'paid') {
+        _alreadyHandledPaid = true;
+        _stopPolling();
         if (!mounted) return;
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => const HomePage()),
+          MaterialPageRoute(builder: (_) => const PaymentSuccessPage()),
           (route) => false,
         );
       } else if (invoiceStatus == 'failed' || orderStatus == 'cancelled' || paymentStatus == 'failed') {
+        _stopPolling();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Downpayment failed or was cancelled. Please try again.'),
@@ -134,6 +195,7 @@ class _QrphPageState extends State<QrphPage> {
   }
 
   Future<void> _cancelDownpaymentAndExit() async {
+    _stopPolling();
     final token = await Auth.getToken();
     if (token == null || token.isEmpty) {
       if (!mounted) return;
@@ -167,6 +229,31 @@ class _QrphPageState extends State<QrphPage> {
     );
   }
 
+  /// Back arrow: mark invoice as failed via API, then return to Place Order screen.
+  Future<void> _cancelAndGoBack() async {
+    _stopPolling();
+    final token = await Auth.getToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    final base = Auth.apiBaseUrl;
+    try {
+      await http.post(
+        Uri.parse('$base/orders/downpayment/cancel/${widget.invoiceId}'),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+    } catch (_) {
+      // still go back even if request fails
+    }
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Log QR URL to debug loading issues
@@ -184,7 +271,7 @@ class _QrphPageState extends State<QrphPage> {
           padding: const EdgeInsets.only(left: 8),
           child: IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.black, size: 24),
-            onPressed: () => Navigator.pop(context),
+            onPressed: _cancelAndGoBack,
           ),
         ),
         title: const Text(

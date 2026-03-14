@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -2220,6 +2221,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
   bool _loadingAddress = true;
   bool _placingOrder = false;
 
+  /// Idempotency key for downpayment API. Reused on retry to avoid duplicate orders.
+  String? _downpaymentIdempotencyKey;
+
   double get _totalPayment => widget.cartSubtotal ?? 0;
 
   @override
@@ -2308,6 +2312,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
     }
     final address = _checkoutAddress;
     final fullAddress = (address?['fullAddress'] ?? '').toString().trim();
+    final addressFirstName = (address?['firstName'] ?? '').toString().trim();
+    final addressLastName = (address?['lastName'] ?? '').toString().trim();
+    final addressContact = (address?['contact'] ?? '').toString().trim();
     if (fullAddress.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -2336,8 +2343,34 @@ class _CheckoutPageState extends State<CheckoutPage> {
     final subtotal = widget.cartSubtotal ?? 0;
     final first = items.first;
 
+    // Use one idempotency key per "Place Order" so retries don't create duplicate orders.
+    if (_downpaymentIdempotencyKey == null) {
+      final r = Random();
+      _downpaymentIdempotencyKey =
+          '${DateTime.now().millisecondsSinceEpoch}_${r.nextInt(0x7FFFFFFF)}_${r.nextInt(0x7FFFFFFF)}';
+    }
+
     setState(() => _placingOrder = true);
     try {
+      final bodyMap = <String, dynamic>{
+        'product_name': first.name,
+        'product_type': first.category.isNotEmpty ? first.category : 'Plain Flavors',
+        'gallon_size': first.size,
+        'delivery_date': deliveryDate,
+        'delivery_time': deliveryTime,
+        'delivery_address': fullAddress,
+        'amount': subtotal,
+        'quantity': first.quantity,
+        'qty': first.quantity,
+        'payment_method': 'Gcash',
+        'downpayment_percent': percent,
+        'address_first_name': addressFirstName,
+        'address_last_name': addressLastName,
+        'address_contact': addressContact,
+      };
+      if (_downpaymentIdempotencyKey != null && _downpaymentIdempotencyKey!.isNotEmpty) {
+        bodyMap['idempotency_key'] = _downpaymentIdempotencyKey!;
+      }
       final res = await http.post(
         Uri.parse('$base/orders/downpayment'),
         headers: {
@@ -2345,19 +2378,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({
-          'product_name': first.name,
-          'product_type': first.category.isNotEmpty ? first.category : 'Plain Flavors',
-          'gallon_size': first.size,
-          'delivery_date': deliveryDate,
-          'delivery_time': deliveryTime,
-          'delivery_address': fullAddress,
-          'amount': subtotal,
-          'quantity': first.quantity,
-          'qty': first.quantity,
-          'payment_method': 'Gcash',
-          'downpayment_percent': percent,
-        }),
+        body: jsonEncode(bodyMap),
       );
       if (!mounted) return;
       setState(() => _placingOrder = false);
@@ -2381,10 +2402,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
         return;
       }
       final invoiceId = data['invoice_id'];
-      final orderId = data['order_id'];
+      final orderIdRaw = data['order_id'];
       final qrUrl = data['qr_image_url'] as String?;
       final downAmount = (data['downpayment_amount'] as num?)?.toDouble() ?? 0.0;
-      if (qrUrl == null || invoiceId == null || orderId == null) {
+      if (qrUrl == null || invoiceId == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Invalid payment response from server.'),
@@ -2393,17 +2414,23 @@ class _CheckoutPageState extends State<CheckoutPage> {
         );
         return;
       }
+      final orderId = orderIdRaw == null
+          ? null
+          : (orderIdRaw is int ? orderIdRaw : int.tryParse(orderIdRaw.toString()));
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => QrphPage(
             invoiceId: invoiceId is int ? invoiceId : int.parse(invoiceId.toString()),
-            orderId: orderId is int ? orderId : int.parse(orderId.toString()),
+            orderId: orderId,
             qrImageUrl: qrUrl,
             downpaymentAmount: downAmount,
           ),
         ),
-      );
+      ).then((_) {
+        if (!mounted) return;
+        setState(() => _downpaymentIdempotencyKey = null);
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _placingOrder = false);

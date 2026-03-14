@@ -8,6 +8,7 @@ import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/messages/messages.dart';
 import 'package:ice_cream/client/order/deliverTracker.dart';
 import 'package:ice_cream/client/order/menu.dart';
+import 'package:ice_cream/client/order/order_detail.dart';
 import 'package:ice_cream/client/order/order_record.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
@@ -461,7 +462,12 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                               ).then((_) => _fetchOrders());
                             }
                             if (leftText == "Details") {
-                              // Optional: navigate to order detail screen if you add one
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => OrderDetailPage(order: order),
+                                ),
+                              );
                             }
                           },
                           child: Container(

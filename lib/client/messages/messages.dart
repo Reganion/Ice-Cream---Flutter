@@ -274,6 +274,68 @@ Future<bool> markOrderMessagesRead({required int orderId}) async {
   return res.statusCode == 200;
 }
 
+/// Customer: archive all messages in this order thread (soft-delete; order_message.customer_status → archive).
+Future<bool> archiveOrderMessages({required int orderId}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final uri = Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages/archive');
+  final res = await http.post(
+    uri,
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    },
+    body: jsonEncode(<String, dynamic>{}),
+  );
+  if (res.statusCode != 200 && res.statusCode != 201) return false;
+  try {
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Customer: archive only the selected messages (order_message.customer_status → archive).
+/// POST /api/v1/orders/{id}/messages/archive-selected with body: { "message_ids": [1, 2, 3] }
+Future<bool> archiveSelectedOrderMessages({
+  required int orderId,
+  required List<int> messageIds,
+}) async {
+  if (messageIds.isEmpty) return true;
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final uri = Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages/archive-selected');
+  final res = await http.post(
+    uri,
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    },
+    body: jsonEncode({'message_ids': messageIds}),
+  );
+  if (res.statusCode != 200 && res.statusCode != 201) return false;
+  try {
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Customer: restore archived messages in this order thread.
+Future<bool> unarchiveOrderMessages({required int orderId}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final res = await http.post(
+    Uri.parse('${Auth.apiBaseUrl}/orders/$orderId/messages/unarchive'),
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  return res.statusCode == 200;
+}
+
 DateTime? _parseDateTimeMaybe(dynamic value) {
   final s = value?.toString();
   if (s == null || s.trim().isEmpty) return null;
@@ -397,11 +459,16 @@ String _extractDriverGroupKeyFromOrder(Map<String, dynamic> order, String fallba
   return 'order:${order['id'] ?? ''}';
 }
 
+/// Fetches driver chat threads. Only includes orders that have at least one active message
+/// (customer_status = active). Threads with no active messages or all archived are hidden.
 Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
   final token = await Auth.getToken();
   if (token == null || token.isEmpty) return [];
   final uri = Uri.parse('${Auth.apiBaseUrl}/orders').replace(
-    queryParameters: {'status': 'all'},
+    queryParameters: {
+      'status': 'all',
+      'for_driver_chats': '1', // backend: only orders with ≥1 active message (or no messages)
+    },
   );
   final res = await http.get(
     uri,
@@ -437,8 +504,7 @@ Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
       order['last_message_text'],
       order['message_preview'],
     ]);
-    final effectivePreview =
-        preview.isNotEmpty ? preview : 'No messages yet. Tap to start.';
+    final effectivePreview = preview.isNotEmpty ? preview : '';
     final key = _extractDriverGroupKeyFromOrder(order, driverName);
     final existing = grouped[key];
     if (existing == null) {
@@ -470,7 +536,7 @@ Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
     );
   }
 
-  final threads = grouped.values.toList();
+  var threads = grouped.values.toList();
   threads.sort((a, b) {
     final aAt = a.lastAt;
     final bAt = b.lastAt;
@@ -479,6 +545,17 @@ Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
     if (bAt == null) return -1;
     return bAt.compareTo(aAt);
   });
+
+  // Hide threads with no active messages (all archived or empty).
+  // Keep thread when API returns null (don't hide on network/auth error). Only hide when we
+  // get a successful empty response (no active messages).
+  final withActive = await Future.wait(
+    threads.map((t) => fetchOrderMessages(orderId: t.orderId, perPage: 1)),
+  );
+  threads = [
+    for (var i = 0; i < threads.length; i++)
+      if (withActive[i] == null || withActive[i]!.isNotEmpty) threads[i],
+  ];
 
   return threads;
 }
@@ -523,6 +600,9 @@ class _MessagesPageState extends State<MessagesPage> {
   String? _driverError;
   bool _chatRefreshInFlight = false;
   bool _driverRefreshInFlight = false;
+  /// Selection mode for driver chats: long-press to select threads for delete (archive).
+  bool _driverSelectionMode = false;
+  final Set<int> _selectedDriverOrderIds = {};
 
   @override
   void initState() {
@@ -565,6 +645,105 @@ class _MessagesPageState extends State<MessagesPage> {
       }
     }
     return true;
+  }
+
+  /// Delete button enabled: on Chats tab only when at least one driver thread is selected.
+  bool get _isDeleteEnabled {
+    if (selectedTab == 0) return _selectedDriverOrderIds.isNotEmpty;
+    return true; // Notifications tab: allow delete all notifications
+  }
+
+  void _exitDriverSelectionMode() {
+    setState(() {
+      _driverSelectionMode = false;
+      _selectedDriverOrderIds.clear();
+    });
+  }
+
+  void _onDriverThreadLongPress(DriverOrderThread thread) {
+    setState(() {
+      _driverSelectionMode = true;
+      _selectedDriverOrderIds.add(thread.orderId);
+    });
+  }
+
+  void _onDriverThreadTap(DriverOrderThread thread) {
+    if (_driverSelectionMode) {
+      setState(() {
+        if (_selectedDriverOrderIds.contains(thread.orderId)) {
+          _selectedDriverOrderIds.remove(thread.orderId);
+          if (_selectedDriverOrderIds.isEmpty) _driverSelectionMode = false;
+        } else {
+          _selectedDriverOrderIds.add(thread.orderId);
+        }
+      });
+      return;
+    }
+    // Normal tap: open chat
+    _openDriverChat(thread);
+  }
+
+  Future<void> _openDriverChat(DriverOrderThread thread) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DriverOrderChatPage(
+          orderId: thread.orderId,
+          relatedOrderIds: thread.relatedOrderIds,
+          driverName: thread.driverName,
+          driverContact: thread.driverContact,
+          orderLabel: thread.orderLabel,
+        ),
+      ),
+    );
+    if (mounted) _refreshDriverThreadsSilent();
+  }
+
+  Future<void> _archiveSelectedDriverThreads() async {
+    final orderIds = _selectedDriverOrderIds.toList();
+    for (final orderId in orderIds) {
+      await archiveOrderMessages(orderId: orderId);
+    }
+    if (mounted) {
+      _exitDriverSelectionMode();
+      await _loadDriverThreads();
+    }
+  }
+
+  /// Archive a single conversation directly from the list (no selection mode).
+  Future<void> _archiveConversation(DriverOrderThread thread) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archive conversation?'),
+        content: Text(
+          'Archive chat with ${thread.driverName}? You can\'t undo this.',
+          style: const TextStyle(fontSize: 15),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Archive', style: TextStyle(color: Color(0xFFE3001B), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final ok = await archiveOrderMessages(orderId: thread.orderId);
+    if (mounted) {
+      setState(() {
+        _driverThreads = _driverThreads.where((t) => t.orderId != thread.orderId).toList();
+      });
+      if (ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Conversation archived.')),
+        );
+      }
+    }
   }
 
   /// Initial load: shows loading indicator.
@@ -683,7 +862,7 @@ class _MessagesPageState extends State<MessagesPage> {
       if (latest == null) return t;
       final msg = latest.message.trim();
       return t.copyWith(
-        preview: msg.isNotEmpty ? msg : (t.preview ?? 'No messages yet. Tap to start.'),
+        preview: msg.isNotEmpty ? msg : (t.preview ?? ''),
         lastAt: latest.createdAt ?? t.lastAt,
       );
     }).toList();
@@ -707,6 +886,8 @@ class _MessagesPageState extends State<MessagesPage> {
             _driverError = null;
           });
         }
+        // Hydrate previews (latest message text) when returning from a chat
+        _hydrateDriverThreadLatestMessages();
       }
     } catch (_) {
     } finally {
@@ -730,23 +911,26 @@ class _MessagesPageState extends State<MessagesPage> {
   child: Row(
     mainAxisAlignment: MainAxisAlignment.spaceBetween,
     children: [
-      const Text(
-        "Messages",
-        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500),
-      ),
+      _driverSelectionMode
+          ? TextButton(
+              onPressed: _exitDriverSelectionMode,
+              child: const Text('Cancel', style: TextStyle(color: Color(0xFFE3001B))),
+            )
+          : const Text(
+              "Messages",
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500),
+            ),
       IconButton(
-        icon: const Icon(
-          Symbols.delete, // ✅ Material Symbols icon
+        icon: Icon(
+          Symbols.delete,
           size: 25,
-          color: Colors.black,
-
-          // ✅ matches your CSS:
+          color: _isDeleteEnabled ? Colors.black : Colors.black38,
           fill: 0,
           weight: 200,
           grade: 200,
           opticalSize: 24,
         ),
-        onPressed: () => _showDeleteAllModal(context),
+        onPressed: _isDeleteEnabled ? () => _showDeleteAllModal(context) : null,
       ),
     ],
   ),
@@ -947,30 +1131,32 @@ class _MessagesPageState extends State<MessagesPage> {
                         ),
                         ..._driverThreads.map((thread) => Padding(
                               padding: const EdgeInsets.only(bottom: 10),
-                              child: GestureDetector(
-                                onTap: () async {
-                                  await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => DriverOrderChatPage(
-                                        orderId: thread.orderId,
-                                        relatedOrderIds: thread.relatedOrderIds,
-                                        driverName: thread.driverName,
-                                        driverContact: thread.driverContact,
-                                        orderLabel: thread.orderLabel,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onLongPress: () => _onDriverThreadLongPress(thread),
+                                      onTap: () => _onDriverThreadTap(thread),
+                                      child: messageCard(
+                                        icon: Icons.person,
+                                        name: thread.driverName,
+                                        message: thread.preview ?? '',
+                                        time: thread.lastAt != null
+                                            ? formatMessageTimeAgo(thread.lastAt!)
+                                            : '',
+                                        isSelectionMode: _driverSelectionMode,
+                                        isSelected: _selectedDriverOrderIds.contains(thread.orderId),
                                       ),
                                     ),
-                                  );
-                                  if (mounted) _refreshDriverThreadsSilent();
-                                },
-                                child: messageCard(
-                                  icon: Icons.person,
-                                  name: thread.driverName,
-                                  message: thread.preview ?? 'No messages yet. Tap to start.',
-                                  time: thread.lastAt != null
-                                      ? formatMessageTimeAgo(thread.lastAt!)
-                                      : '',
-                                ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Symbols.delete_outline, size: 22, color: Color(0xFF747474)),
+                                    onPressed: () => _archiveConversation(thread),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                  ),
+                                ],
                               ),
                             )),
                       ],
@@ -1025,10 +1211,14 @@ class _MessagesPageState extends State<MessagesPage> {
   }
 
   void _showDeleteAllModal(BuildContext context) {
-    // Determine the correct title based on active tab
+    final count = _selectedDriverOrderIds.length;
+    final bool singleSelection = count == 1;
     String title = selectedTab == 1
         ? "Delete all notifications?"
-        : "Delete all messages?";
+        : (singleSelection ? "Delete selected message?" : "Delete all messages?");
+    String deleteButtonLabel = selectedTab == 1
+        ? "Delete All"
+        : (singleSelection ? "Delete" : "Delete All");
 
     showModalBottomSheet(
       context: context,
@@ -1062,7 +1252,7 @@ class _MessagesPageState extends State<MessagesPage> {
 
               // Subtitle
               const Text(
-                "You can’t undo this later.",
+                "You can't undo this later.",
                 style: TextStyle(
                   fontSize: 16,
                   color: Color(0xFF747474),
@@ -1072,11 +1262,14 @@ class _MessagesPageState extends State<MessagesPage> {
 
               const SizedBox(height: 30),
 
-              // DELETE ALL button
+              // DELETE / DELETE ALL button
               GestureDetector(
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(context);
-                  // Add your delete logic (messages or notifications)
+                  if (selectedTab == 0 && _selectedDriverOrderIds.isNotEmpty) {
+                    await _archiveSelectedDriverThreads();
+                  }
+                  // Notifications tab: delete-all logic can be added here if needed
                 },
                 child: Container(
                   width: double.infinity,
@@ -1086,9 +1279,9 @@ class _MessagesPageState extends State<MessagesPage> {
                     borderRadius: BorderRadius.circular(40),
                   ),
                   alignment: Alignment.center,
-                  child: const Text(
-                    "Delete All",
-                    style: TextStyle(
+                  child: Text(
+                    deleteButtonLabel,
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 17,
                       fontWeight: FontWeight.w500,
@@ -1189,6 +1382,8 @@ class _MessagesPageState extends State<MessagesPage> {
     required String name,
     required String message,
     required String time,
+    bool isSelectionMode = false,
+    bool isSelected = false,
   })
 
 {
@@ -1230,10 +1425,24 @@ class _MessagesPageState extends State<MessagesPage> {
     decoration: BoxDecoration(
       color: const Color(0xFFFFFFFF),
       borderRadius: BorderRadius.circular(11),
+      border: isSelectionMode && isSelected
+          ? Border.all(color: const Color(0xFFE3001B), width: 2)
+          : null,
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (isSelectionMode) ...[
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Icon(
+              isSelected ? Symbols.check_circle : Symbols.radio_button_unchecked,
+              size: 24,
+              color: isSelected ? const Color(0xFFE3001B) : Colors.grey,
+              fill: isSelected ? 1 : 0,
+            ),
+          ),
+        ],
         Transform.translate(
           offset: const Offset(-4, 0),
           child: Container(
@@ -1880,6 +2089,10 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
   String? _error;
   bool _sending = false;
   int _activeOrderId = 0;
+  /// Long-press to select messages, then Delete archives the thread.
+  bool _selectionMode = false;
+  final Set<int> _selectedMessageIds = {};
+  bool _archiving = false;
 
   @override
   void initState() {
@@ -2008,11 +2221,76 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
     });
   }
 
-  Widget _buildMessageBubble(OrderMessageItem m) {
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _onMessageLongPress(OrderMessageItem m) {
+    setState(() {
+      _selectionMode = true;
+      _selectedMessageIds.add(m.id);
+    });
+  }
+
+  void _onMessageTap(OrderMessageItem m) {
+    if (!_selectionMode) return;
+    setState(() {
+      if (_selectedMessageIds.contains(m.id)) {
+        _selectedMessageIds.remove(m.id);
+        if (_selectedMessageIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedMessageIds.add(m.id);
+      }
+    });
+  }
+
+  /// Archive selected messages (customer_status → archive) or whole thread if none selected.
+  Future<void> _archiveThread() async {
+    if (_archiving) return;
+    setState(() => _archiving = true);
+    try {
+      final ids = _selectedMessageIds.toList();
+      final ok = ids.isNotEmpty
+          ? await archiveSelectedOrderMessages(orderId: widget.orderId, messageIds: ids)
+          : await archiveOrderMessages(orderId: widget.orderId);
+      if (mounted) {
+        _exitSelectionMode();
+        if (ok) {
+          if (ids.isNotEmpty) {
+            setState(() {
+              _messages = _messages.where((m) => !ids.contains(m.id)).toList();
+            });
+          } else {
+            setState(() {
+              _messages = [];
+              _loading = false;
+            });
+          }
+          await _loadMessages();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Messages deleted successfully.')),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to archive.')),
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _archiving = false);
+    }
+  }
+
+  Widget _buildMessageBubble(OrderMessageItem m, {bool isSelectionMode = false, bool isSelected = false}) {
     final isCustomer = m.isMine || m.senderType == _senderCustomer;
     final timeStr = formatMessageTime(m.createdAt ?? DateTime.now());
 
-    return Padding(
+    Widget bubble = Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Align(
         alignment: isCustomer ? Alignment.centerRight : Alignment.centerLeft,
@@ -2085,6 +2363,25 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
         ),
       ),
     );
+
+    if (isSelectionMode) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 12, right: 8),
+            child: Icon(
+              isSelected ? Symbols.check_circle : Symbols.radio_button_unchecked,
+              size: 22,
+              color: isSelected ? const Color(0xFFE3001B) : Colors.grey,
+              fill: isSelected ? 1 : 0,
+            ),
+          ),
+          Expanded(child: bubble),
+        ],
+      );
+    }
+    return bubble;
   }
 
   @override
@@ -2102,52 +2399,71 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
                   Padding(
                     padding: const EdgeInsets.only(left: 3),
                     child: IconButton(
-                      icon: const Icon(
-                        Symbols.arrow_back_ios,
+                      icon: Icon(
+                        _selectionMode ? Symbols.close : Symbols.arrow_back_ios,
                         size: 22,
                         weight: 400,
                         color: Colors.black,
                       ),
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: _selectionMode ? _exitSelectionMode : () => Navigator.pop(context),
                     ),
                   ),
-                  const CircleAvatar(
-                    radius: avatarRadius,
-                    backgroundColor: Color(0xFFFFE5E5),
-                    child: Icon(
-                      Symbols.person,
-                      color: Color(0xFFE3001B),
-                      size: 21,
-                      fill: 1,
-                      weight: 700,
+                  if (!_selectionMode) ...[
+                    const CircleAvatar(
+                      radius: avatarRadius,
+                      backgroundColor: Color(0xFFFFE5E5),
+                      child: Icon(
+                        Symbols.person,
+                        color: Color(0xFFE3001B),
+                        size: 21,
+                        fill: 1,
+                        weight: 700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.driverName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.driverName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        ),
-                        Text(
-                          widget.driverContact.isNotEmpty
-                              ? widget.driverContact
-                              : widget.orderLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.grey, fontSize: 13),
-                        ),
-                      ],
+                          Text(
+                            widget.driverContact.isNotEmpty
+                                ? widget.driverContact
+                                : widget.orderLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.grey, fontSize: 13),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                  ] else ...[
+                    Expanded(
+                      child: Text(
+                        '${_selectedMessageIds.length} selected',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _archiving ? null : _archiveThread,
+                      child: _archiving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Delete', style: TextStyle(color: Color(0xFFE3001B), fontWeight: FontWeight.w600)),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2188,7 +2504,15 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
                                     itemCount: _messages.length,
                                     itemBuilder: (context, index) {
                                       final m = _messages[index];
-                                      return _buildMessageBubble(m);
+                                      return GestureDetector(
+                                        onLongPress: () => _onMessageLongPress(m),
+                                        onTap: () => _onMessageTap(m),
+                                        child: _buildMessageBubble(
+                                          m,
+                                          isSelectionMode: _selectionMode,
+                                          isSelected: _selectedMessageIds.contains(m.id),
+                                        ),
+                                      );
                                     },
                                   ),
                                 ),
