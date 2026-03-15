@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/driver/delivery/complete_delivery.dart';
 import 'package:ice_cream/driver/delivery/confirm_delivery.dart';
 import 'package:ice_cream/driver/delivery/view_details.dart';
 import 'package:ice_cream/driver/message/messages.dart';
@@ -81,6 +82,31 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
     final amount = map['amount'];
     if (amount is num) return '₱${amount.toStringAsFixed(0)}';
     return raw.isNotEmpty ? raw : '₱0';
+  }
+
+  /// Real order status label for Accepted tab (from API status field).
+  String _orderStatusBadgeLabel(String? rawStatus) {
+    final s = (rawStatus ?? '').toString().trim().toLowerCase();
+    if (s.isEmpty) return 'Pending';
+    switch (s) {
+      case 'assigned':
+        return 'Assigned';
+      case 'preparing':
+        return 'Preparing';
+      case 'ready':
+        return 'Ready';
+      case 'out for delivery':
+      case 'out_of_delivery':
+        return 'Out for delivery';
+      case 'completed':
+        return 'Completed';
+      case 'pending':
+        return 'Pending';
+      default:
+        return s.length > 1
+            ? s.substring(0, 1).toUpperCase() + s.substring(1)
+            : s.toUpperCase();
+    }
   }
 
   Color _hexToColor(String? hex, Color fallback) {
@@ -641,6 +667,10 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                       ..._shipments.asMap().entries.map((entry) {
                         final shipment = entry.value;
                         final isCompleted = _selectedTabIndex == 2;
+                        final isAcceptedTab = _selectedTabIndex == 1;
+                        final badgeLabel = isAcceptedTab
+                            ? _orderStatusBadgeLabel(shipment['status']?.toString())
+                            : (shipment['badge'] ?? (isCompleted ? 'Completed' : 'New')).toString();
                         final badgeColor = _hexToColor(
                           shipment['badge_color']?.toString(),
                           _selectedTabIndex == 1
@@ -654,7 +684,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                                       shipment['transaction_id'] ??
                                       '—')
                                   .toString(),
-                              badge: (shipment['badge'] ?? 'New').toString(),
+                              badge: badgeLabel,
                               badgeColor: badgeColor,
                               productName: (shipment['product_name'] ?? '—').toString(),
                               price: _displayAmount(shipment),
@@ -665,16 +695,28 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                               onTap: isCompleted
                                   ? null
                                   : () {
+                                      final id = shipment['id'] is int
+                                          ? shipment['id'] as int
+                                          : int.tryParse(shipment['id']?.toString() ?? '');
+                                      final status = (shipment['status'] ?? '').toString().toLowerCase();
+                                      final statusDriver = (shipment['status_driver'] ?? '').toString().toLowerCase();
+                                      final isOutForDelivery = status == 'out for delivery' ||
+                                          status == 'out_of_delivery' ||
+                                          statusDriver == 'on_route';
+                                      final goToComplete = _selectedTabIndex == 1 && isOutForDelivery;
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute<void>(
-                                          builder: (_) => ConfirmDeliveryPage(
-                                            showDeliverNowOnly: _selectedTabIndex == 1,
-                                            shipmentId: shipment['id'] is int
-                                                ? shipment['id'] as int
-                                                : int.tryParse(shipment['id']?.toString() ?? ''),
-                                            initialShipment: shipment,
-                                          ),
+                                          builder: (_) => goToComplete
+                                              ? CompleteDeliveryPage(
+                                                  shipmentId: id,
+                                                  initialShipment: shipment,
+                                                )
+                                              : ConfirmDeliveryPage(
+                                                  showDeliverNowOnly: _selectedTabIndex == 1,
+                                                  shipmentId: id,
+                                                  initialShipment: shipment,
+                                                ),
                                         ),
                                       ).then((_) => _fetchShipments());
                                     },

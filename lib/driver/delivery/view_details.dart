@@ -81,18 +81,23 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
           'Authorization': 'Bearer $token',
         },
       );
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      Map<String, dynamic>? data;
+      try {
+        data = jsonDecode(res.body) as Map<String, dynamic>?;
+      } catch (_) {
+        data = null;
+      }
       if (!mounted) return;
-      if (res.statusCode == 200 && data['success'] == true && data['shipment'] is Map) {
+      if (res.statusCode == 200 && data != null && data['success'] == true && data['shipment'] is Map) {
         setState(() {
-          _shipment = Map<String, dynamic>.from(data['shipment'] as Map);
+          _shipment = Map<String, dynamic>.from(data!['shipment'] as Map);
           _loading = false;
           _error = '';
         });
       } else {
         setState(() {
           _loading = false;
-          _error = (data['message'] ?? 'Could not load shipment.').toString();
+          _error = (data?['message'] ?? 'Could not load shipment.').toString();
         });
       }
     } catch (_) {
@@ -104,18 +109,20 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
     }
   }
 
+  /// Build full URL for delivery proof image. Handles full URLs (with localhost
+  /// remap), relative paths, and storage paths. Uses same base as rest of app.
   String _resolveProofImageUrl(String raw) {
-    final value = raw.trim();
+    final value = raw.trim().replaceAll(r'\', '/');
     if (value.isEmpty || value.toLowerCase() == 'null') return '';
-    final apiUri = Uri.parse(Auth.apiBaseUrl);
-    final origin = '${apiUri.scheme}://${apiUri.authority}';
+
+    final base = Auth.apiBaseUrl.replaceAll('/api/v1', '').replaceAll(RegExp(r'/+$'), '');
+    final apiUri = Uri.tryParse(Auth.apiBaseUrl);
+
     if (value.startsWith('http://') || value.startsWith('https://')) {
       final remote = Uri.tryParse(value);
       if (remote == null) return value;
-
-      // Backend may return localhost/127.0.0.1 in APP_URL; remap to API host for devices.
       const localHosts = {'localhost', '127.0.0.1', '::1'};
-      if (localHosts.contains(remote.host.toLowerCase())) {
+      if (apiUri != null && localHosts.contains(remote.host.toLowerCase())) {
         final remapped = remote.replace(
           scheme: apiUri.scheme,
           host: apiUri.host,
@@ -126,13 +133,11 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
       return value;
     }
 
-    if (value.startsWith('/')) {
-      return '$origin$value';
+    final path = value.startsWith('/') ? value : '/$value';
+    if (path.toLowerCase().startsWith('/storage/')) {
+      return '$base$path';
     }
-    if (value.startsWith('storage/')) {
-      return '$origin/$value';
-    }
-    return '$origin/storage/$value';
+    return '$base/storage$path'.replaceAll(RegExp(r'/+'), '/');
   }
 
   String _firstNonEmpty(Iterable<dynamic> values, {String fallback = '—'}) {
@@ -436,7 +441,7 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Delivered address:',
+              'Delivery address:',
               style: TextStyle(
                 color: kMuted,
                 fontSize: 14,
@@ -514,6 +519,14 @@ class _DeliveryViewDetailsPageState extends State<DeliveryViewDetailsPage> {
                     ? Image.network(
                         imageUrl,
                         fit: BoxFit.cover,
+                        loadingBuilder: (_, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: const Color(0xFFE1E1E1),
+                            alignment: Alignment.center,
+                            child: const CircularProgressIndicator(strokeWidth: 2),
+                          );
+                        },
                         errorBuilder: (_, __, ___) => Container(
                           color: const Color(0xFFE1E1E1),
                           alignment: Alignment.center,

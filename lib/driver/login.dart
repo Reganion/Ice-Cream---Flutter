@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/client/landing_page.dart';
 import 'package:ice_cream/driver/forgot_password.dart';
 import 'package:ice_cream/driver/shipments.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -198,7 +199,11 @@ class _LoginScreenState extends State<LoginScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const LandingPage()),
+              (route) => false,
+            );
           },
         ),
       ),

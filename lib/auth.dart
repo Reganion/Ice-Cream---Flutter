@@ -852,6 +852,53 @@ class Auth {
     throw Exception(_extractMessage(data).isNotEmpty ? _extractMessage(data) : 'Could not update password.');
   }
 
+  /// Permanently delete account. DELETE /api/v1/account with Bearer token.
+  /// Body: { "password": "...", "reason": "..." } where reason is optional.
+  Future<void> deleteAccount({
+    required String password,
+    String? reason,
+  }) async {
+    final token = await getToken();
+    if (token == null || token.isEmpty) throw Exception('Not authenticated.');
+
+    final uri = Uri.parse('$_apiBaseUrl/account');
+    final body = <String, dynamic>{'password': password};
+    if (reason != null && reason.trim().isNotEmpty) {
+      body['reason'] = reason.trim();
+    }
+
+    final response = await http.delete(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+    final data = _decodeJson(response.body);
+
+    if (response.statusCode == 200 && (data['success'] == true)) {
+      await _clearToken();
+      await _clearCustomerCache();
+      return;
+    }
+
+    if (response.statusCode == 401) {
+      await _clearToken();
+      await _clearCustomerCache();
+      throw Exception('Session expired. Please log in again.');
+    }
+
+    if (response.statusCode == 422) {
+      final msg = _extractValidationMessage(data);
+      throw Exception(msg.isNotEmpty ? msg : 'Could not delete account.');
+    }
+
+    final msg = _extractMessage(data);
+    throw Exception(msg.isNotEmpty ? msg : 'Could not delete account.');
+  }
+
   /// End session: call API logout then clear local token and customer cache
   /// so profile shows "Session ended" (not "Session expired") after logging out.
   Future<void> signOut() async {

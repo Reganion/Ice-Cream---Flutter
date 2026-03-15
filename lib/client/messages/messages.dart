@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -495,15 +494,27 @@ Future<List<DriverOrderThread>> fetchDriverOrderThreads() async {
     final driverContact = _extractDriverContactFromOrder(order);
     final transactionId = (order['transaction_id'] ?? 'Order #$orderId').toString();
     final orderLabel = (order['product_name'] ?? order['product_type'] ?? 'Order').toString();
-    final lastAt = _parseDateTimeMaybe(order['updated_at']) ??
+    // Prefer newest active order message from API (`latest_message`) for preview + time,
+    // falling back to order timestamps and legacy preview fields.
+    String latestText = '';
+    DateTime? latestAt;
+    final latestRaw = order['latest_message'];
+    if (latestRaw is Map) {
+      final latestMap = Map<String, dynamic>.from(latestRaw);
+      latestText = (latestMap['message'] ?? '').toString().trim();
+      latestAt = _parseDateTimeMaybe(latestMap['created_at']);
+    }
+    final fallbackLastAt = _parseDateTimeMaybe(order['updated_at']) ??
         _parseDateTimeMaybe(order['created_at']) ??
         _parseDateTimeMaybe(order['delivery_date']);
-    final preview = _pickFirstNonEmpty([
-      order['latest_message'],
-      order['last_message'],
-      order['last_message_text'],
-      order['message_preview'],
-    ]);
+    final lastAt = latestAt ?? fallbackLastAt;
+    final preview = latestText.isNotEmpty
+        ? latestText
+        : _pickFirstNonEmpty([
+            order['last_message'],
+            order['last_message_text'],
+            order['message_preview'],
+          ]);
     final effectivePreview = preview.isNotEmpty ? preview : '';
     final key = _extractDriverGroupKeyFromOrder(order, driverName);
     final existing = grouped[key];
@@ -707,42 +718,6 @@ class _MessagesPageState extends State<MessagesPage> {
     if (mounted) {
       _exitDriverSelectionMode();
       await _loadDriverThreads();
-    }
-  }
-
-  /// Archive a single conversation directly from the list (no selection mode).
-  Future<void> _archiveConversation(DriverOrderThread thread) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Archive conversation?'),
-        content: Text(
-          'Archive chat with ${thread.driverName}? You can\'t undo this.',
-          style: const TextStyle(fontSize: 15),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Archive', style: TextStyle(color: Color(0xFFE3001B), fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true || !mounted) return;
-    final ok = await archiveOrderMessages(orderId: thread.orderId);
-    if (mounted) {
-      setState(() {
-        _driverThreads = _driverThreads.where((t) => t.orderId != thread.orderId).toList();
-      });
-      if (ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Conversation archived.')),
-        );
-      }
     }
   }
 
@@ -1132,7 +1107,7 @@ class _MessagesPageState extends State<MessagesPage> {
                         ..._driverThreads.map((thread) => Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Expanded(
                                     child: GestureDetector(
@@ -1149,12 +1124,6 @@ class _MessagesPageState extends State<MessagesPage> {
                                         isSelected: _selectedDriverOrderIds.contains(thread.orderId),
                                       ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Symbols.delete_outline, size: 22, color: Color(0xFF747474)),
-                                    onPressed: () => _archiveConversation(thread),
-                                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
                                   ),
                                 ],
                               ),
@@ -1467,45 +1436,37 @@ class _MessagesPageState extends State<MessagesPage> {
         const SizedBox(width: 10),
 
         Expanded(
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Transform.translate(
-                offset: const Offset(0, -4),
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 7),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      Text(
-                        message,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF1C1B1F),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+          child: Transform.translate(
+            offset: const Offset(0, -4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-              ),
-              Positioned(
-                bottom: -3,
-                right: 0,
-                child: Text(
-                  time,
-                  style: const TextStyle(fontSize: 12, color: Colors.black45),
+                Text(
+                  message,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF1C1B1F),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    time,
+                    style: const TextStyle(fontSize: 12, color: Colors.black45),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],

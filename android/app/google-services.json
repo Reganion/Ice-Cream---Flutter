@@ -13,7 +13,12 @@
           "package_name": "com.example.ice_cream"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "74810571043-ubsdi2nuvfhd2hf6f75cd7upkorubfir.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyDXUSMhRdI4NQIe-csJc4fCkwLTIpehtZ0"
@@ -21,7 +26,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "74810571043-ubsdi2nuvfhd2hf6f75cd7upkorubfir.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

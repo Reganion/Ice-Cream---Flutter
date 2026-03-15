@@ -59,6 +59,14 @@ class _ConfirmDeliveryPageState extends State<ConfirmDeliveryPage> {
     return int.tryParse(id?.toString() ?? '');
   }
 
+  /// Normalized order status (lowercase, trimmed).
+  String get _orderStatus =>
+      (_shipment?['status'] ?? '').toString().trim().toLowerCase();
+
+  /// Deliver now is only allowed when order status is "ready" (not when preparing).
+  bool get _canDeliverNow =>
+      _showDeliverNow && _orderStatus == 'ready';
+
   String _fmtMoney(dynamic value) {
     if (value == null) return '₱0';
     final s = value.toString();
@@ -211,63 +219,6 @@ class _ConfirmDeliveryPageState extends State<ConfirmDeliveryPage> {
     _openChatForCustomer();
   }
 
-  String _normalizePhone(String value) {
-    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.isEmpty) return '';
-    return digits.startsWith('63') ? digits.substring(2) : digits;
-  }
-
-  String _normalizeName(String value) => value.trim().toLowerCase();
-
-  Future<List<Map<String, dynamic>>> _fetchShipmentsTabForChat(
-    String tab,
-    String token,
-  ) async {
-    final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments')
-        .replace(queryParameters: {'tab': tab});
-    final res = await http.get(
-      uri,
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200 || data['success'] != true || data['shipments'] is! List) {
-      return <Map<String, dynamic>>[];
-    }
-    return (data['shipments'] as List)
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
-  }
-
-  Future<List<int>> _relatedShipmentIdsForCustomer({
-    required String token,
-    required int currentId,
-    required String customerName,
-    required String customerPhone,
-  }) async {
-    final all = <Map<String, dynamic>>[];
-    for (final tab in const ['incoming', 'accepted', 'completed']) {
-      all.addAll(await _fetchShipmentsTabForChat(tab, token));
-    }
-    final currentPhone = _normalizePhone(customerPhone);
-    final currentName = _normalizeName(customerName);
-    final ids = <int>{currentId};
-    for (final s in all) {
-      final rawId = s['id'];
-      final id = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
-      if (id == null) continue;
-      final phone = _normalizePhone((s['customer_phone'] ?? '').toString());
-      final name = _normalizeName((s['customer_name'] ?? '').toString());
-      final sameByPhone = currentPhone.isNotEmpty && phone == currentPhone;
-      final sameByName = currentPhone.isEmpty && currentName.isNotEmpty && name == currentName;
-      if (sameByPhone || sameByName) ids.add(id);
-    }
-    return ids.toList();
-  }
-
   Future<void> _openChatForCustomer() async {
     final id = _shipmentId;
     if (id == null) {
@@ -286,19 +237,13 @@ class _ConfirmDeliveryPageState extends State<ConfirmDeliveryPage> {
     }
     final customerName = (_shipment?['customer_name'] ?? 'Customer').toString();
     final customerPhone = (_shipment?['customer_phone'] ?? '').toString();
-    final relatedIds = await _relatedShipmentIdsForCustomer(
-      token: token,
-      currentId: id,
-      customerName: customerName,
-      customerPhone: customerPhone,
-    );
     if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ChatPage(
           shipmentId: id,
-          relatedShipmentIds: relatedIds,
+          relatedShipmentIds: [id],
           customerName: customerName,
           customerPhone: customerPhone,
         ),
@@ -710,43 +655,61 @@ DraggableScrollableSheet(
                     ),
 
                             SizedBox(height: isCompact ? 12 : 17),
+                            // "Deliver now" only when status is "ready" (not when preparing)
                             _showDeliverNow
-                                ? SizedBox(
-                                    width: double.infinity,
-                                    child: ElevatedButton(
-                                      onPressed: (_loading || _submitting)
-                                          ? null
-                                          : () async {
-                                              final ok =
-                                                  await _postShipmentAction('deliver');
-                                              if (!mounted || !ok) return;
-                                              Navigator.pushReplacement(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (_) => CompleteDeliveryPage(
-                                                    shipmentId: _shipmentId,
-                                                    initialShipment: _shipment,
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFFE3001B),
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(vertical: isCompact ? 13 : 16),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(999),
+                                ? Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (!_canDeliverNow && _orderStatus == 'preparing')
+                                        Padding(
+                                          padding: const EdgeInsets.only(bottom: 8),
+                                          child: Text(
+                                            'Order is being prepared. You can deliver when Ice Cream is Ready.',
+                                            style: TextStyle(
+                                              fontSize: isCompact ? 12 : 13,
+                                              color: const Color(0xFF606060),
+                                            ),
+                                          ),
                                         ),
-                                        elevation: 0,
-                                      ),
-                                      child: Text(
-                                        'Deliver now',
-                                        style: TextStyle(
-                                          fontSize: isCompact ? 15 : 16,
-                                          fontWeight: FontWeight.w400,
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton(
+                                          onPressed: (_loading || _submitting || !_canDeliverNow)
+                                              ? null
+                                              : () async {
+                                                  final ok =
+                                                      await _postShipmentAction('deliver');
+                                                  if (!mounted || !ok) return;
+                                                  Navigator.pushReplacement(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (_) => CompleteDeliveryPage(
+                                                        shipmentId: _shipmentId,
+                                                        initialShipment: _shipment,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFE3001B),
+                                            foregroundColor: Colors.white,
+                                            disabledBackgroundColor: Colors.grey.shade300,
+                                            padding: EdgeInsets.symmetric(vertical: isCompact ? 13 : 16),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(999),
+                                            ),
+                                            elevation: 0,
+                                          ),
+                                          child: Text(
+                                            'Deliver now',
+                                            style: TextStyle(
+                                              fontSize: isCompact ? 15 : 16,
+                                              fontWeight: FontWeight.w400,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                    ],
                                   )
                                 : Row(
                                     children: [

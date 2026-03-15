@@ -26,6 +26,7 @@ class messagesPage extends StatefulWidget {
 
 class _messagesPageState extends State<messagesPage> {
   bool _loading = true;
+  bool _refreshing = false;
   String _error = '';
   List<Map<String, dynamic>> _threads = [];
 
@@ -40,27 +41,35 @@ class _messagesPageState extends State<messagesPage> {
     return prefs.getString('driver_token');
   }
 
+  static const Duration _apiTimeout = Duration(seconds: 12);
+
   Future<List<Map<String, dynamic>>> _fetchShipmentsTab(
     String tab,
     String token,
   ) async {
-    final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments')
-        .replace(queryParameters: {'tab': tab});
-    final res = await http.get(
-      uri,
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200 || data['success'] != true) return [];
-    final raw = data['shipments'];
-    if (raw is! List) return [];
-    return raw
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
+    try {
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments')
+          .replace(queryParameters: {'tab': tab});
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(_apiTimeout);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 200 || data['success'] != true) return [];
+      final raw = data['shipments'];
+      if (raw is! List) return [];
+      return raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   DateTime? _parseDateTime(dynamic value) {
@@ -74,13 +83,17 @@ class _messagesPageState extends State<messagesPage> {
     required String token,
   }) async {
     try {
-      final res = await http.get(
-        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$shipmentId/messages'),
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$shipmentId/messages')
+          .replace(queryParameters: const {'status': 'active'});
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(_apiTimeout);
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       final list = data['data'];
       if (res.statusCode != 200 || data['success'] != true || list is! List || list.isEmpty) {
@@ -100,9 +113,14 @@ class _messagesPageState extends State<messagesPage> {
   }
 
   Future<void> _fetchThreads() async {
+    final isRefresh = _threads.isNotEmpty;
     setState(() {
-      _loading = true;
-      _error = '';
+      if (isRefresh) {
+        _refreshing = true;
+      } else {
+        _loading = true;
+        _error = '';
+      }
     });
     try {
       final token = await _token();
@@ -110,17 +128,19 @@ class _messagesPageState extends State<messagesPage> {
         if (!mounted) return;
         setState(() {
           _loading = false;
+          _refreshing = false;
           _error = 'Missing driver session. Please login again.';
           _threads = [];
         });
         return;
       }
 
-      final all = <Map<String, dynamic>>[];
       final tabs = ['incoming', 'accepted', 'completed'];
-      for (final tab in tabs) {
-        all.addAll(await _fetchShipmentsTab(tab, token));
-      }
+      final tabResults = await Future.wait(
+        tabs.map((tab) => _fetchShipmentsTab(tab, token)),
+      );
+      final all = <Map<String, dynamic>>[];
+      for (final list in tabResults) all.addAll(list);
 
       final byId = <int, Map<String, dynamic>>{};
       for (final shipment in all) {
@@ -132,8 +152,11 @@ class _messagesPageState extends State<messagesPage> {
 
       final list = byId.entries.map((e) {
         final shipment = e.value;
+        final cidRaw = shipment['customer_id'];
+        final customerId = cidRaw is int ? cidRaw : int.tryParse(cidRaw?.toString() ?? '');
         return <String, dynamic>{
           'shipment_id': e.key,
+          'customer_id': customerId,
           'customer_name': (shipment['customer_name'] ?? 'Customer').toString(),
           'customer_phone': (shipment['customer_phone'] ?? '').toString(),
           'delivery_address': (shipment['delivery_address'] ?? shipment['location'] ?? '').toString(),
@@ -142,22 +165,31 @@ class _messagesPageState extends State<messagesPage> {
         };
       }).toList();
 
+      final previews = await Future.wait(
+        list.map((item) => _fetchLastMessagePreview(
+          shipmentId: item['shipment_id'] as int,
+          token: token,
+        )),
+      );
       final filtered = <Map<String, dynamic>>[];
-      for (final item in list) {
-        final id = item['shipment_id'] as int;
-        final preview = await _fetchLastMessagePreview(shipmentId: id, token: token);
+      for (var i = 0; i < list.length; i++) {
+        final preview = previews[i];
         if (preview == null) continue;
+        final item = Map<String, dynamic>.from(list[i]);
         item['last_message'] = (preview['message'] ?? '').toString();
         item['last_message_at'] = preview['created_at'];
         filtered.add(item);
       }
 
-      // Merge threads by same customer so conversation continues in one chat.
+      // Merge threads by same customer (use customer_id to avoid duplication when names/phones match).
       final grouped = <String, Map<String, dynamic>>{};
       for (final item in filtered) {
+        final customerId = item['customer_id'] is int ? item['customer_id'] as int? : int.tryParse((item['customer_id'] ?? '').toString());
         final phone = (item['customer_phone'] ?? '').toString().trim();
         final name = (item['customer_name'] ?? 'Customer').toString().trim().toLowerCase();
-        final key = phone.isNotEmpty ? 'p:$phone' : 'n:$name';
+        final key = (customerId != null && customerId > 0)
+            ? 'c:$customerId'
+            : (phone.isNotEmpty ? 'p:$phone' : 'n:$name');
         final itemShipmentId = item['shipment_id'] as int;
         final itemAt = _parseDateTime(item['last_message_at']);
 
@@ -215,11 +247,13 @@ class _messagesPageState extends State<messagesPage> {
       setState(() {
         _threads = merged;
         _loading = false;
+        _refreshing = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
+        _refreshing = false;
         _threads = [];
         _error = 'Could not load messages. Check connection.';
       });
@@ -247,11 +281,18 @@ class _messagesPageState extends State<messagesPage> {
                       color: Color(0xFF1C1B1F),
                     ),
                   ),
+                  if (_refreshing) ...[
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(const Color(0xFFE3001B)),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
-                  IconButton(
-                    onPressed: _fetchThreads,
-                    icon: const Icon(Symbols.refresh, size: 22, color: Color(0xFF1C1B1F)),
-                  ),
                   InkWell(
                     onTap: () {
                       Navigator.push(
@@ -309,45 +350,51 @@ class _messagesPageState extends State<messagesPage> {
                                 style: TextStyle(color: Color(0xFF666666)),
                               ),
                             )
-                          : ListView.separated(
-                              padding: const EdgeInsets.symmetric(horizontal: 20),
-                              itemCount: _threads.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (_, index) {
-                                final thread = _threads[index];
-                                final shipmentId = thread['shipment_id'] as int;
-                                final shipmentIds = (thread['shipment_ids'] as List?)
-                                        ?.map((e) => int.tryParse(e.toString()))
-                                        .whereType<int>()
-                                        .toList() ??
-                                    <int>[shipmentId];
-                                final name = (thread['customer_name'] ?? 'Customer').toString();
-                                final phone = (thread['customer_phone'] ?? '').toString();
-                                final preview = (thread['last_message'] ?? '').toString();
-                                final subtitle = (thread['delivery_address'] ?? '').toString();
-                                return GestureDetector(
-                                  onTap: () async {
-                                    await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChatPage(
-                                          shipmentId: shipmentId,
-                                          relatedShipmentIds: shipmentIds,
-                                          customerName: name,
-                                          customerPhone: phone,
+                          : RefreshIndicator(
+                              onRefresh: _fetchThreads,
+                              child: ListView.separated(
+                                padding: const EdgeInsets.symmetric(horizontal: 20),
+                                itemCount: _threads.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                itemBuilder: (_, index) {
+                                  final thread = _threads[index];
+                                  final shipmentId = thread['shipment_id'] as int;
+                                  final shipmentIds = (thread['shipment_ids'] as List?)
+                                          ?.map((e) => int.tryParse(e.toString()))
+                                          .whereType<int>()
+                                          .toList() ??
+                                      <int>[shipmentId];
+                                  final name = (thread['customer_name'] ?? 'Customer').toString();
+                                  final phone = (thread['customer_phone'] ?? '').toString();
+                                  final rawPreview = (thread['last_message'] ?? '').toString();
+                                  final preview = rawPreview.length > 50
+                                      ? '${rawPreview.substring(0, 47)}...'
+                                      : rawPreview;
+                                  final subtitle = (thread['delivery_address'] ?? '').toString();
+                                  return GestureDetector(
+                                    onTap: () async {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ChatPage(
+                                            shipmentId: shipmentId,
+                                            relatedShipmentIds: shipmentIds,
+                                            customerName: name,
+                                            customerPhone: phone,
+                                          ),
                                         ),
-                                      ),
-                                    );
-                                    _fetchThreads();
-                                  },
-                                  child: _MessageCard(
-                                    icon: Symbols.person,
-                                    name: name,
-                                    message: preview,
-                                    time: subtitle.isEmpty ? 'Shipment #$shipmentId' : subtitle,
-                                  ),
-                                );
-                              },
+                                      );
+                                      _fetchThreads();
+                                    },
+                                    child: _MessageCard(
+                                      icon: Symbols.person,
+                                      name: name,
+                                      message: preview,
+                                      time: subtitle.isEmpty ? 'Shipment #$shipmentId' : subtitle,
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
             ),
           ],
@@ -464,7 +511,7 @@ class _ChatPageState extends State<ChatPage> {
   final TextEditingController _messageCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
 
-  bool _loading = true;
+  bool _hasLoadedOnce = false;
   bool _sending = false;
   String _error = '';
   List<_OrderMessage> _messages = [];
@@ -474,7 +521,7 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _activeShipmentId = widget.shipmentId;
-    _loadMessages();
+    _loadMessages(showLoader: false);
     _markRead();
   }
 
@@ -509,49 +556,59 @@ class _ChatPageState extends State<ChatPage> {
     return set.toList();
   }
 
+  static const Duration _messagesRequestTimeout = Duration(seconds: 15);
+
   Future<List<_OrderMessage>> _fetchMessagesForShipment({
     required int shipmentId,
     required String token,
   }) async {
-    final res = await http.get(
-      Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$shipmentId/messages'),
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200 || data['success'] != true || data['data'] is! List) {
+    try {
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments/$shipmentId/messages')
+          .replace(queryParameters: const {'status': 'active'});
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(_messagesRequestTimeout);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 200 || data['success'] != true || data['data'] is! List) {
+        return <_OrderMessage>[];
+      }
+      return (data['data'] as List)
+          .whereType<Map>()
+          .map((raw) => _OrderMessage.fromMap(Map<String, dynamic>.from(raw)))
+          .toList();
+    } catch (_) {
       return <_OrderMessage>[];
     }
-    return (data['data'] as List)
-        .whereType<Map>()
-        .map((raw) => _OrderMessage.fromMap(Map<String, dynamic>.from(raw)))
-        .toList();
   }
 
   Future<void> _loadMessages({bool showLoader = true}) async {
     if (showLoader) {
-      setState(() {
-        _loading = true;
-        _error = '';
-      });
+      setState(() => _error = '');
     }
     try {
       final token = await _token();
       if (token == null || token.isEmpty) {
         if (!mounted) return;
         setState(() {
-          _loading = false;
+          _hasLoadedOnce = true;
           _error = 'Missing driver session. Please login again.';
           _messages = [];
         });
         return;
       }
       final shipmentIds = _shipmentIds;
+      final results = await Future.wait(
+        shipmentIds.map((id) => _fetchMessagesForShipment(shipmentId: id, token: token)),
+      );
       final merged = <_OrderMessage>[];
-      for (final id in shipmentIds) {
-        merged.addAll(await _fetchMessagesForShipment(shipmentId: id, token: token));
+      for (final list in results) {
+        merged.addAll(list);
       }
       if (!mounted) return;
       if (merged.isNotEmpty) {
@@ -569,7 +626,7 @@ class _ChatPageState extends State<ChatPage> {
         setState(() {
           _messages = merged;
           _activeShipmentId = latest.orderId > 0 ? latest.orderId : widget.shipmentId;
-          _loading = false;
+          _hasLoadedOnce = true;
           _error = '';
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -579,16 +636,20 @@ class _ChatPageState extends State<ChatPage> {
       } else {
         setState(() {
           _messages = [];
-          _loading = false;
+          _hasLoadedOnce = true;
           _error = '';
         });
       }
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _loading = false;
+        _hasLoadedOnce = true;
         _error = 'Could not load messages. Check connection.';
       });
+    } finally {
+      if (mounted) {
+        setState(() => _hasLoadedOnce = true);
+      }
     }
   }
 
@@ -638,8 +699,10 @@ class _ChatPageState extends State<ChatPage> {
         _messageCtrl.clear();
         await _loadMessages(showLoader: false);
       } else {
+        final msg = (data['message'] ?? 'Could not send message.').toString();
+        final shortMsg = msg.length > 60 ? '${msg.substring(0, 57)}...' : msg;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text((data['message'] ?? 'Could not send message.').toString())),
+          SnackBar(content: Text(shortMsg)),
         );
       }
     } catch (_) {
@@ -708,85 +771,109 @@ class _ChatPageState extends State<ChatPage> {
                       ],
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => _loadMessages(showLoader: false),
-                    icon: const Icon(Symbols.refresh),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                  : _error.isNotEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  _error,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Color(0xFFE3001B)),
-                                ),
-                                const SizedBox(height: 10),
-                                ElevatedButton(
-                                  onPressed: () => _loadMessages(),
-                                  child: const Text('Retry'),
-                                ),
-                              ],
+              child: _error.isNotEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _error,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Color(0xFFE3001B)),
                             ),
+                            const SizedBox(height: 10),
+                            ElevatedButton(
+                              onPressed: () => _loadMessages(showLoader: false),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : !_hasLoadedOnce && _messages.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Loading messages...',
+                                style: TextStyle(color: Color(0xFF666666), fontSize: 14),
+                              ),
+                            ],
                           ),
                         )
-                      : ListView.builder(
-                          controller: _scrollCtrl,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            final item = _messages[index];
-                            final mine = item.isMine;
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Align(
-                                alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Column(
-                                  crossAxisAlignment: mine
-                                      ? CrossAxisAlignment.end
-                                      : CrossAxisAlignment.start,
-                                  children: [
-                                    Container(
-                                      constraints: const BoxConstraints(maxWidth: 280),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 15,
-                                        vertical: 10,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: mine
-                                            ? const Color(0xFFE3001B)
-                                            : const Color(0xFFEAEAEA),
-                                        borderRadius: BorderRadius.circular(18),
-                                      ),
-                                      child: Text(
-                                        item.message,
-                                        style: TextStyle(
-                                          color: mine ? Colors.white : const Color(0xFF1C1B1F),
-                                          fontWeight: FontWeight.w400,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _formatTime(item.createdAt),
-                                      style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
-                                    ),
-                                  ],
-                                ),
+                      : _messages.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No messages yet.',
+                                style: TextStyle(color: Color(0xFF666666), fontSize: 14),
                               ),
-                            );
-                          },
-                        ),
+                            )
+                          : RefreshIndicator(
+                              onRefresh: () => _loadMessages(showLoader: false),
+                              child: ListView.builder(
+                                controller: _scrollCtrl,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                itemCount: _messages.length,
+                                itemBuilder: (context, index) {
+                                  final item = _messages[index];
+                                  final mine = item.isMine;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: Align(
+                                      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                                      child: Column(
+                                        crossAxisAlignment: mine
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          Container(
+                                            constraints: const BoxConstraints(maxWidth: 280),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 15,
+                                              vertical: 10,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: mine
+                                                  ? const Color(0xFFE3001B)
+                                                  : const Color(0xFFEAEAEA),
+                                              borderRadius: BorderRadius.circular(18),
+                                            ),
+                                            child: Text(
+                                              item.message,
+                                              maxLines: 15,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: mine ? Colors.white : const Color(0xFF1C1B1F),
+                                                fontWeight: FontWeight.w400,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _formatTime(item.createdAt),
+                                            style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),

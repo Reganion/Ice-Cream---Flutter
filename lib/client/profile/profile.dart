@@ -7,7 +7,6 @@ import 'package:ice_cream/client/create_page.dart';
 import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/landing_page.dart';
 import 'package:ice_cream/client/login_page.dart';
-import 'package:ice_cream/client/order/gcash.dart';
 import 'package:ice_cream/client/order/manage_address.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -281,26 +280,6 @@ class _ProfilePageState extends State<ProfilePage> {
                       );
                     },
                   ),
-                  _settingsTile(
-                    iconWidget: const Icon(
-                      Symbols.credit_card,
-                      size: 23,
-                      color: Colors.black87,
-                      fill: 0,
-                      weight: 300,
-                      grade: 0,
-                      opticalSize: 24,
-                    ),
-                    text: "Payment Method",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const PaymentMethodPage(),
-                        ),
-                      );
-                    },
-                  ),
                   const Spacer(),
                   // --- Logout Button ---
                   Padding(
@@ -479,26 +458,6 @@ class _ProfilePageState extends State<ProfilePage> {
                               context,
                               MaterialPageRoute(
                                 builder: (context) => const DeleteAccount(),
-                              ),
-                            );
-                          },
-                        ),
-                        _settingsTile(
-                          iconWidget: const Icon(
-                            Symbols.credit_card,
-                            size: 23,
-                            color: Colors.black87,
-                            fill: 0,
-                            weight: 300,
-                            grade: 0,
-                            opticalSize: 24,
-                          ),
-                          text: "Payment Method",
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const PaymentMethodPage(),
                               ),
                             );
                           },
@@ -2790,10 +2749,15 @@ class _DeleteAccountState extends State<DeleteAccount> {
                   absorbing: selectedReason == null || (isOtherSelected && (otherReasonText == null || otherReasonText!.trim().isEmpty)),
                   child: ElevatedButton(
                     onPressed: () {
+                      final other = (otherReasonText ?? '').trim();
+                      final selected = (selectedReason ?? '').trim();
+                      final reason = isOtherSelected ? other : selected;
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const DeleteConfirmPage(),
+                          builder: (context) => DeleteConfirmPage(
+                            reason: reason.isEmpty ? null : reason,
+                          ),
                         ),
                       );
                     },
@@ -2826,7 +2790,8 @@ class _DeleteAccountState extends State<DeleteAccount> {
 }
 
 class DeleteConfirmPage extends StatefulWidget {
-  const DeleteConfirmPage({super.key});
+  const DeleteConfirmPage({super.key, this.reason});
+  final String? reason;
 
   @override
   State<DeleteConfirmPage> createState() => _DeleteConfirmPageState();
@@ -2837,10 +2802,10 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
   final TextEditingController _passwordController = TextEditingController();
   bool _showPasswordEye = false;
   bool _passwordError = false;
+  String? _passwordErrorMessage;
+  bool _deleting = false;
   final FocusNode _focusNodePassword = FocusNode();
   Color _passwordBorderColor = const Color(0xFFA9A9A9);
-
-  bool get _isDeleteEnabled => _passwordController.text.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -2938,16 +2903,15 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                       onPressed: onSuffixIconTap,
                     )
                   : null,
-              errorText: errorFlag ? "Password cannot be empty" : null,
             ),
           ),
         ),
         if (errorFlag)
-          const Padding(
-            padding: EdgeInsets.only(left: 8, top: 3),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 3),
             child: Text(
-              "Password cannot be empty",
-              style: TextStyle(
+              _passwordErrorMessage ?? "Please enter your password.",
+              style: const TextStyle(
                 color: Color(0xFFE3001C),
                 fontSize: 12,
               ),
@@ -2959,26 +2923,12 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
 
   @override
   Widget build(BuildContext context) {
-    final bool deleteEnabled = _isDeleteEnabled;
-    final orientation = MediaQuery.of(context).orientation;
-   
-    Widget buildButton({required Widget child}) {
-      if (orientation == Orientation.landscape) {
-        return SizedBox(width: double.infinity, height: 56, child: child);
-      } else {
-        return SizedBox(width: 320, height: 56, child: child);
-      }
-    }
-
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFA),
       resizeToAvoidBottomInset: true, // enables resizing to avoid overflow when keyboard appears
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // In landscape, let password input, delete, cancel expand to full width (minus paddings)
-            final isLandscape = orientation == Orientation.landscape;
-           
             return SingleChildScrollView(
               // Add a scroll view so the content can be scrolled up when the keyboard shows.
               padding: EdgeInsets.only(
@@ -3042,14 +2992,16 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                         ),
                       ),
                       const SizedBox(height: 15),
-                      // Make password input expand to full width in landscape
                       SizedBox(
-                        width: isLandscape ? double.infinity : 320,
+                        width: double.infinity,
                         child: _buildInput(
                           label: "Password",
                           controller: _passwordController,
                           errorFlag: _passwordError,
-                          onErrorChange: (v) => setState(() => _passwordError = v),
+                          onErrorChange: (v) => setState(() {
+                            _passwordError = v;
+                            if (!v) _passwordErrorMessage = null;
+                          }),
                           borderColor: _passwordBorderColor,
                           onBorderChange: (color) => setState(() => _passwordBorderColor = color),
                           focusNode: _focusNodePassword,
@@ -3064,18 +3016,45 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                       ),
                       const Spacer(),
                       const SizedBox(height: 15),
-                      buildButton(
+                      SizedBox(
+                        width: double.infinity,
+                        height: 56,
                         child: ElevatedButton(
-                          onPressed: deleteEnabled
-                              ? () {
-                                  Navigator.pushReplacement(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => const DeleteSuccessPage(),
-                                    ),
-                                  );
-                                }
-                              : null,
+                          onPressed: _deleting
+                              ? null
+                              : () async {
+                                  final password = _passwordController.text.trim();
+                                  if (password.isEmpty) {
+                                    setState(() {
+                                      _passwordError = true;
+                                      _passwordErrorMessage = "Please enter your password.";
+                                    });
+                                    return;
+                                  }
+                                  setState(() => _deleting = true);
+                                  try {
+                                    await Auth().deleteAccount(
+                                      password: password,
+                                      reason: widget.reason,
+                                    );
+                                    if (!mounted) return;
+                                    Navigator.pushAndRemoveUntil(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => const DeleteSuccessPage(),
+                                      ),
+                                      (route) => false,
+                                    );
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    setState(() {
+                                      _deleting = false;
+                                      _passwordError = true;
+                                      _passwordErrorMessage =
+                                          e.toString().replaceFirst('Exception: ', '');
+                                    });
+                                  }
+                                },
                           style: ButtonStyle(
                             backgroundColor: MaterialStateProperty.resolveWith<Color>(
                               (Set<MaterialState> states) {
@@ -3092,9 +3071,9 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                             ),
                             elevation: MaterialStateProperty.all<double>(0),
                           ),
-                          child: const Text(
-                            'Delete',
-                            style: TextStyle(
+                          child: Text(
+                            _deleting ? 'Deleting...' : 'Delete',
+                            style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w400,
                               color: Colors.white,
@@ -3103,7 +3082,9 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                         ),
                       ),
                       const SizedBox(height: 13),
-                      buildButton(
+                      SizedBox(
+                        width: double.infinity,
+                        height: 56,
                         child: ElevatedButton(
                           onPressed: () {
                             Navigator.pop(context);

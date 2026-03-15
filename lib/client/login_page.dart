@@ -4,6 +4,7 @@ import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/forgot_password.dart';
 import 'create_page.dart'; // or the correct file path
 import 'home_page.dart'; // or the correct file path
+import 'landing_page.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -28,6 +29,7 @@ class _LoginPageState extends State<LoginPage> {
 
   bool _emailError = false;
   bool _passwordError = false;
+  String? _passwordErrorMessage;
 
   // Persistent focus nodes
   final FocusNode _focusNodeEmail = FocusNode();
@@ -136,7 +138,11 @@ Future<void> _signInWithGoogle() async {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const LandingPage()),
+              (route) => false,
+            );
           },
         ),
       ),
@@ -210,6 +216,7 @@ Future<void> _signInWithGoogle() async {
                         focusNode: _focusNodeEmail,
                         showSuffixIcon: _showEmailClear,
                         suffixIconType: SuffixIconType.clear,
+                        errorMessage: "This field is required.",
                         obscureText: false,
                         onSuffixIconTap: () {
                           setState(() {
@@ -226,14 +233,18 @@ Future<void> _signInWithGoogle() async {
                         label: "Password",
                         controller: _passwordController,
                         errorFlag: _passwordError,
-                        onErrorChange: (v) =>
-                            setState(() => _passwordError = v),
+                        onErrorChange: (v) => setState(() {
+                          _passwordError = v;
+                          if (!v) _passwordErrorMessage = null;
+                        }),
                         borderColor: _passwordBorderColor,
                         onBorderChange: (color) =>
                             setState(() => _passwordBorderColor = color),
                         focusNode: _focusNodePassword,
                         showSuffixIcon: _showPasswordEye,
                         suffixIconType: SuffixIconType.visibility,
+                        errorMessage:
+                            _passwordErrorMessage ?? "This field is required.",
                         obscureText: _obscurePassword,
                         onSuffixIconTap: () {
                           setState(() {
@@ -276,6 +287,9 @@ Future<void> _signInWithGoogle() async {
                             setState(() {
                               _emailError = _emailController.text.isEmpty;
                               _passwordError = _passwordController.text.isEmpty;
+                              _passwordErrorMessage = _passwordError
+                                  ? "This field is required."
+                                  : null;
                             });
 
                             if (!_emailError && !_passwordError) {
@@ -313,15 +327,13 @@ Future<void> _signInWithGoogle() async {
                                 }
                               } catch (e) {
                                 if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      e is Exception
-                                          ? e.toString().replaceFirst('Exception: ', '')
-                                          : 'Invalid email or password',
-                                    ),
-                                  ),
-                                );
+                                final msg = e is Exception
+                                    ? e.toString().replaceFirst('Exception: ', '')
+                                    : 'Invalid email or password';
+                                setState(() {
+                                  _passwordError = true;
+                                  _passwordErrorMessage = msg;
+                                });
                               }
                             }
                           },
@@ -435,6 +447,7 @@ Future<void> _signInWithGoogle() async {
     required String label,
     required TextEditingController controller,
     required bool errorFlag,
+    String? errorMessage,
     required Function(bool) onErrorChange,
     required Color borderColor,
     required Function(Color) onBorderChange,
@@ -529,11 +542,11 @@ Future<void> _signInWithGoogle() async {
           ),
         ),
         if (errorFlag)
-          const Padding(
-            padding: EdgeInsets.only(top: 4, left: 4),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4),
             child: Text(
-              "This field is required.",
-              style: TextStyle(fontSize: 12, color: Color(0xFFE3001C)),
+              errorMessage ?? "This field is required.",
+              style: const TextStyle(fontSize: 12, color: Color(0xFFE3001C)),
             ),
           ),
       ],

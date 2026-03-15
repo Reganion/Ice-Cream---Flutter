@@ -39,16 +39,35 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     'pending',
     'preparing',
     'assigned',
+    'ready',
+    'out of delivery',
+    'out for delivery',
+  };
+  // Only these statuses show "Rate"; must be Completed (API only accepts rating for completed).
+  static const Set<String> _rateableStatuses = {
+    'completed',
   };
   static const Set<String> _cancelledStatuses = {
     'cancelled',
     'canceled',
+  };
+  // Still in Processing tab, but only "Details" and "Track Order" (no Cancel).
+  static const Set<String> _nonCancellableStatuses = {
+    'preparing',
+    'ready',
+    'out of delivery',
+    'out for delivery',
   };
 
   @override
   void initState() {
     super.initState();
     _fetchOrders();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   Future<void> _fetchOrders() async {
@@ -138,6 +157,14 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   bool _isCancelledStatus(String status) {
     final normalized = _normalizeStatus(status);
     return _cancelledStatuses.contains(normalized);
+  }
+
+  bool _isCancellable(OrderRecord order) {
+    return !_nonCancellableStatuses.contains(_normalizeStatus(order.status));
+  }
+
+  bool _isRateable(OrderRecord order) {
+    return _rateableStatuses.contains(_normalizeStatus(order.status));
   }
 
   @override
@@ -300,18 +327,30 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     Color rightTextColor = Colors.black87;
 
     if (isCompletedTab) {
-      leftText = "Rate";
-      leftBgColor = const Color(0xFFFFD900);
-      leftTextColor = Colors.black;
+      if (_isRateable(order)) {
+        leftText = "Rate";
+        leftBgColor = const Color(0xFFFFD900);
+        leftTextColor = Colors.black;
+      } else {
+        leftText = "Details";
+        leftBgColor = const Color(0xFFF2F2F2);
+        leftTextColor = Colors.black87;
+      }
       rightText = "Buy Again";
       rightColor = const Color(0xFFF2F2F2);
       rightTextColor = Colors.black87;
       showRightBtn = true;
     } else if (isProcessingTab) {
-      leftText = "Cancel";
-      leftBgColor = Colors.white;
-      leftTextColor = const Color(0xFFE3001B);
-      leftBorderColor = const Color(0xFFE3001B);
+      if (_isCancellable(order)) {
+        leftText = "Cancel";
+        leftBgColor = Colors.white;
+        leftTextColor = const Color(0xFFE3001B);
+        leftBorderColor = const Color(0xFFE3001B);
+      } else {
+        leftText = "Details";
+        leftBgColor = const Color(0xFFF2F2F2);
+        leftTextColor = Colors.black87;
+      }
       rightText = "Track Order";
       rightColor = const Color(0xFF007CFF);
       rightTextColor = Colors.white;
@@ -326,10 +365,16 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
       showRightBtn = true;
     } else {
       if (order.isProcessing) {
-        leftText = "Cancel";
-        leftBgColor = const Color(0xFFFCE8E9);
-        leftTextColor = const Color(0xFFE3001B);
-        leftBorderColor = const Color(0xFFE3001B);
+        if (_isCancellable(order)) {
+          leftText = "Cancel";
+          leftBgColor = const Color(0xFFFCE8E9);
+          leftTextColor = const Color(0xFFE3001B);
+          leftBorderColor = const Color(0xFFE3001B);
+        } else {
+          leftText = "Details";
+          leftBgColor = const Color(0xFFF2F2F2);
+          leftTextColor = Colors.black87;
+        }
         showRightBtn = true;
         rightText = "Track Order";
         rightColor = const Color(0xFF007CFF);
@@ -343,9 +388,15 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         rightTextColor = const Color(0xFFFFFFFF);
         showRightBtn = true;
       } else {
-        leftText = "Rate";
-        leftBgColor = const Color(0xFFFFD900);
-        leftTextColor = Colors.black;
+        if (_isRateable(order)) {
+          leftText = "Rate";
+          leftBgColor = const Color(0xFFFFD900);
+          leftTextColor = Colors.black;
+        } else {
+          leftText = "Details";
+          leftBgColor = const Color(0xFFF2F2F2);
+          leftTextColor = Colors.black87;
+        }
         rightText = "Buy Again";
         rightColor = const Color(0xFFF2F2F2);
         rightTextColor = Colors.black87;

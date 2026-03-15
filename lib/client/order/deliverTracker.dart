@@ -6,6 +6,7 @@ import 'package:ice_cream/client/order/order_record.dart';
 import 'package:ice_cream/auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class DeliveryTrackerPage extends StatefulWidget {
   const DeliveryTrackerPage({super.key, required this.order});
@@ -18,13 +19,21 @@ class DeliveryTrackerPage extends StatefulWidget {
 
 class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
   late OrderRecord _order = widget.order;
+  int? _driverId;
+  String _driverName = '—';
+  String _driverPhone = '';
+  String _customerContact = '—';
   bool _refreshing = false;
 
   @override
   void initState() {
     super.initState();
-    // Best-effort refresh so status/date stay up to date.
     _refreshOrder();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   Future<void> _refreshOrder() async {
@@ -41,12 +50,207 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>?;
       if (res.statusCode == 200) {
         final data = body?['data'] as Map<String, dynamic>?;
-        if (data != null) setState(() => _order = OrderRecord.fromJson(data));
+        if (data != null) {
+          setState(() {
+            _order = OrderRecord.fromJson(data);
+            _driverId = _extractDriverId(data);
+            _driverName = _extractDriverName(data);
+            _driverPhone = _extractDriverPhone(data);
+            _customerContact = _extractCustomerContact(data);
+          });
+        }
       }
     } catch (_) {
       // Ignore refresh errors; we still show the passed-in order data.
     } finally {
       if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  String _pickFirstNonEmpty(List<dynamic> values) {
+    for (final v in values) {
+      final s = (v ?? '').toString().trim();
+      if (s.isNotEmpty) return s;
+    }
+    return '';
+  }
+
+  String _extractDriverName(Map<String, dynamic> order) {
+    String fullNameFromParts(Map<String, dynamic> source) {
+      final first = _pickFirstNonEmpty([
+        source['firstname'],
+        source['first_name'],
+        source['driver_first_name'],
+        source['assigned_driver_first_name'],
+        source['rider_first_name'],
+      ]);
+      final last = _pickFirstNonEmpty([
+        source['lastname'],
+        source['last_name'],
+        source['driver_last_name'],
+        source['assigned_driver_last_name'],
+        source['rider_last_name'],
+      ]);
+      return '$first $last'.trim();
+    }
+
+    final direct = _pickFirstNonEmpty([
+      order['driver_name'],
+      order['assigned_driver_name'],
+      order['rider_name'],
+      order['driver_full_name'],
+      order['driver_display_name'],
+    ]);
+    if (direct.isNotEmpty) return direct;
+
+    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    if (nestedRaw is Map) {
+      final nested = Map<String, dynamic>.from(nestedRaw);
+      final nestedDirect = _pickFirstNonEmpty([
+        nested['name'],
+        nested['full_name'],
+        nested['driver_name'],
+        nested['display_name'],
+      ]);
+      if (nestedDirect.isNotEmpty) return nestedDirect;
+      final nestedParts = fullNameFromParts(nested);
+      if (nestedParts.isNotEmpty) return nestedParts;
+    }
+
+    final topParts = fullNameFromParts(order);
+    return topParts.isNotEmpty ? topParts : '—';
+  }
+
+  int? _extractDriverId(Map<String, dynamic> order) {
+    final direct = order['driver_id'];
+    if (direct is int) return direct;
+    final fromDirect = int.tryParse((direct ?? '').toString());
+    if (fromDirect != null && fromDirect > 0) return fromDirect;
+    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    if (nestedRaw is Map) {
+      final nested = Map<String, dynamic>.from(nestedRaw);
+      final nestedId = nested['id'] ?? nested['driver_id'] ?? nested['user_id'];
+      if (nestedId is int) return nestedId;
+      final parsed = int.tryParse((nestedId ?? '').toString());
+      if (parsed != null && parsed > 0) return parsed;
+    }
+    return null;
+  }
+
+  String _extractDriverPhone(Map<String, dynamic> order) {
+    final direct = _pickFirstNonEmpty([
+      order['driver_phone'],
+      order['driver_contact'],
+      order['assigned_driver_phone'],
+      order['assigned_driver_contact'],
+      order['rider_phone'],
+      order['rider_contact'],
+    ]);
+    if (direct.isNotEmpty) return direct;
+
+    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    if (nestedRaw is Map) {
+      final nested = Map<String, dynamic>.from(nestedRaw);
+      final nestedPhone = _pickFirstNonEmpty([
+        nested['phone'],
+        nested['contact_no'],
+        nested['contact_number'],
+        nested['mobile'],
+        nested['mobile_number'],
+      ]);
+      if (nestedPhone.isNotEmpty) return nestedPhone;
+    }
+
+    return '';
+  }
+
+  String _extractCustomerContact(Map<String, dynamic> order) {
+    final direct = _pickFirstNonEmpty([
+      order['customer_phone'],
+      order['customer_contact'],
+      order['contact_no'],
+      order['contact_number'],
+      order['phone'],
+      order['mobile'],
+    ]);
+    if (direct.isNotEmpty) return direct;
+
+    final customerRaw = order['customer'];
+    if (customerRaw is Map) {
+      final customer = Map<String, dynamic>.from(customerRaw);
+      final nested = _pickFirstNonEmpty([
+        customer['contact_no'],
+        customer['contact_number'],
+        customer['customer_phone'],
+        customer['phone'],
+        customer['mobile'],
+      ]);
+      if (nested.isNotEmpty) return nested;
+    }
+
+    return '—';
+  }
+
+  String get _normalizedStatus {
+    return _order.status.trim().toLowerCase().replaceAll('_', ' ');
+  }
+
+  bool get _isOutForDelivery {
+    return _normalizedStatus == 'out of delivery' ||
+        _normalizedStatus == 'out for delivery' ||
+        _normalizedStatus == 'driving' ||
+        _normalizedStatus == 'on the way';
+  }
+
+  bool get _canMessageDriver {
+    return _isOutForDelivery && _driverId != null && _driverId! > 0;
+  }
+
+  Future<void> _openDriverChat() async {
+    if (!_canMessageDriver) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You can only chat the driver when your order is out for delivery.'),
+        ),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DriverOrderChatPage(
+          orderId: _order.id,
+          relatedOrderIds: <int>[_order.id],
+          driverName: _driverName,
+          driverContact: _driverPhone,
+          orderLabel: _order.productName,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _callDriver() async {
+    if (!_isOutForDelivery) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Driver call is available once your order is out for delivery.'),
+        ),
+      );
+      return;
+    }
+    final phone = _driverPhone.trim();
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Driver phone number is not available yet.')),
+      );
+      return;
+    }
+    final uri = Uri(scheme: 'tel', path: phone);
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open phone dialer.')),
+      );
     }
   }
 
@@ -269,8 +473,8 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                             // LEFT - Shipped By
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
-                              children: const [
-                                Text(
+                              children: [
+                                const Text(
                                   'Driver',
                                   style: TextStyle(
                                     fontSize: 12,
@@ -278,10 +482,10 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                                     color: Color(0xFF1C1B1F),
                                   ),
                                 ),
-                                SizedBox(height: 2),
+                                const SizedBox(height: 2),
                                 Text(
-                                  '—',
-                                  style: TextStyle(
+                                  _driverName,
+                                  style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -368,9 +572,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                               const SizedBox(height: 3),
                               _detailRow('Delivery address:', _order.deliveryAddress ?? '—', valueMaxLines: 2),
                               const SizedBox(height: 3),
-                              const _DetailRow(
+                              _DetailRow(
                                 label: 'Contact number:',
-                                value: '—',
+                                value: _customerContact,
                               ),
                             ],
                           ),
@@ -383,13 +587,7 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                             // Message Driver button
                             Expanded(
                               child: GestureDetector(
-                                onTap: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (context) => const ChatPage(),
-                                    ),
-                                  );
-                                },
+                                onTap: _openDriverChat,
                                 child: Container(
                                   height: 55, // same as Check Out
                                   decoration: BoxDecoration(
@@ -401,11 +599,13 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                                       color: Color(0xFF8B8B8B),
                                     ), // border color
                                   ),
-                                  child: const Center(
+                                  child: Center(
                                     child: Text(
                                       "Message Driver",
                                       style: TextStyle(
-                                        color: Color(0xFF494949), // text color
+                                        color: _canMessageDriver
+                                            ? const Color(0xFF494949)
+                                            : const Color(0xFF9A9A9A),
                                         fontSize: 16, // same size as Check Out
                                       ),
                                     ),
@@ -417,19 +617,24 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                             const SizedBox(width: 13),
 
                             // Call icon button
-                            Container(
-                              height: 55, // same height as button
-                              width:
-                                  55, // slightly bigger circle like Check Out add icon
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                                border: Border.all(color: Color(0xFF8B8B8B)),
-                              ),
-                              child: const Icon(
-                                Icons.call, // updated icon
-                                color: Color(0xFF494949),
-                                size: 28, // same as add icon
+                            GestureDetector(
+                              onTap: _callDriver,
+                              child: Container(
+                                height: 55, // same height as button
+                                width:
+                                    55, // slightly bigger circle like Check Out add icon
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  border: Border.all(color: const Color(0xFF8B8B8B)),
+                                ),
+                                child: Icon(
+                                  Icons.call, // updated icon
+                                  color: _isOutForDelivery
+                                      ? const Color(0xFF494949)
+                                      : const Color(0xFF9A9A9A),
+                                  size: 28, // same as add icon
+                                ),
                               ),
                             ),
                           ],

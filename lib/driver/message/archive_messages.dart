@@ -1,94 +1,115 @@
-import 'package:flutter/material.dart';
-import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'dart:convert';
 
-class ArchiveMessagesPage extends StatelessWidget {
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:ice_cream/auth.dart';
+import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ArchiveMessagesPage extends StatefulWidget {
   const ArchiveMessagesPage({super.key});
 
-  static const List<_ArchivedMessage> _archivedMessages = [
-    _ArchivedMessage(
-      phoneNumber: '+63 9123456789',
-      preview: 'Delivered: Order #1001 has been completed successfully.',
-      time: '1 day ago',
-      conversation: [
-        _ArchiveConversationMessage(
-          text: 'Good day! Ma’am I’m at your location.',
-          time: '10:20 am',
-          isDriver: true,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Please leave it by the gate, thank you.',
-          time: '10:21 am',
-          isDriver: false,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Delivered na po. Order #1001 completed.',
-          time: '10:27 am',
-          isDriver: true,
-        ),
-      ],
-    ),
-    _ArchivedMessage(
-      phoneNumber: '+63 9987654321',
-      preview: 'Delivered: Order #1002 received and confirmed.',
-      time: '2 days ago',
-      conversation: [
-        _ArchiveConversationMessage(
-          text: 'Arrived at drop-off point for Order #1002.',
-          time: '1:05 pm',
-          isDriver: true,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Received. Thank you!',
-          time: '1:08 pm',
-          isDriver: false,
-        ),
-      ],
-    ),
-    _ArchivedMessage(
-      phoneNumber: '+63 9276543210',
-      preview: 'Completed delivery for Order #1003. Thank you!',
-      time: '3 days ago',
-      conversation: [
-        _ArchiveConversationMessage(
-          text: 'On the way na po with your order.',
-          time: '3:11 pm',
-          isDriver: true,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Sige po, waiting outside.',
-          time: '3:13 pm',
-          isDriver: false,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Order #1003 delivered successfully.',
-          time: '3:22 pm',
-          isDriver: true,
-        ),
-      ],
-    ),
-    _ArchivedMessage(
-      phoneNumber: '+63 9171234567',
-      preview: 'Delivered: Order #1004 completed at customer location.',
-      time: '4 days ago',
-      conversation: [
-        _ArchiveConversationMessage(
-          text: 'Good afternoon! I’m near your address.',
-          time: '4:40 pm',
-          isDriver: true,
-        ),
-        _ArchiveConversationMessage(
-          text: 'I’ll meet you at the lobby.',
-          time: '4:41 pm',
-          isDriver: false,
-        ),
-        _ArchiveConversationMessage(
-          text: 'Thanks! Delivered and marked complete.',
-          time: '4:47 pm',
-          isDriver: true,
-        ),
-      ],
-    ),
-  ];
+  @override
+  State<ArchiveMessagesPage> createState() => _ArchiveMessagesPageState();
+}
+
+class _ArchiveMessagesPageState extends State<ArchiveMessagesPage> {
+  bool _loading = true;
+  bool _refreshing = false;
+  String _error = '';
+  List<Map<String, dynamic>> _threads = [];
+
+  static const Duration _apiTimeout = Duration(seconds: 12);
+
+  Future<String?> _token() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('driver_token');
+  }
+
+  String _timeAgo(String? iso) {
+    if (iso == null || iso.trim().isEmpty) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inDays > 0) return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    if (diff.inHours > 0) return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+    if (diff.inMinutes > 0) return '${diff.inMinutes} min ago';
+    return 'Just now';
+  }
+
+  Future<void> _fetchArchivedThreads() async {
+    final isRefresh = _threads.isNotEmpty;
+    setState(() {
+      if (isRefresh) {
+        _refreshing = true;
+      } else {
+        _loading = true;
+        _error = '';
+      }
+    });
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          _error = 'Missing driver session. Please login again.';
+          _threads = [];
+        });
+        return;
+      }
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/messages/archived-threads');
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(_apiTimeout);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      if (res.statusCode != 200 || data['success'] != true) {
+        setState(() {
+          _threads = [];
+          _loading = false;
+          _refreshing = false;
+          _error = (data['message'] ?? 'Could not load archived messages.').toString();
+        });
+        return;
+      }
+      final raw = data['data'];
+      final list = raw is List
+          ? raw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+          : <Map<String, dynamic>>[];
+      setState(() {
+        _threads = list;
+        _loading = false;
+        _refreshing = false;
+        _error = '';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _threads = [];
+        _error = 'Could not load archived messages. Check connection.';
+      });
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchArchivedThreads();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -121,37 +142,90 @@ class ArchiveMessagesPage extends StatelessWidget {
                       color: Color(0xFF1C1B1F),
                     ),
                   ),
+                  if (_refreshing) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE3001B)),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: _archivedMessages.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (_, index) {
-                  final item = _archivedMessages[index];
-                  return GestureDetector(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ArchiveChatPage(
-                            phoneNumber: item.phoneNumber,
-                            conversation: item.conversation,
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : _error.isNotEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _error,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Color(0xFFE3001B)),
+                                ),
+                                const SizedBox(height: 12),
+                                ElevatedButton(
+                                  onPressed: _fetchArchivedThreads,
+                                  child: const Text('Retry'),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                    child: _ArchiveMessageCard(
-                      name: item.phoneNumber,
-                      message: item.preview,
-                      time: item.time,
-                    ),
-                  );
-                },
-              ),
+                        )
+                      : _threads.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No archived message threads.',
+                                style: TextStyle(color: Color(0xFF666666)),
+                              ),
+                            )
+                          : RefreshIndicator(
+                              onRefresh: _fetchArchivedThreads,
+                              child: ListView.separated(
+                                padding: const EdgeInsets.symmetric(horizontal: 20),
+                                itemCount: _threads.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                itemBuilder: (_, index) {
+                                  final thread = _threads[index];
+                                  final shipmentId = thread['shipment_id'] is int
+                                      ? thread['shipment_id'] as int
+                                      : int.tryParse((thread['shipment_id'] ?? '').toString()) ?? 0;
+                                  final name = (thread['customer_name'] ?? thread['customer_phone'] ?? 'Customer').toString().trim();
+                                  final preview = (thread['last_message'] ?? '').toString();
+                                  final time = _timeAgo((thread['last_message_at'] ?? '').toString());
+                                  return GestureDetector(
+                                    onTap: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ArchiveChatPage(
+                                            shipmentId: shipmentId,
+                                            customerName: name.isEmpty ? 'Customer' : name,
+                                            customerPhone: (thread['customer_phone'] ?? '').toString(),
+                                          ),
+                                        ),
+                                      ).then((_) => _fetchArchivedThreads());
+                                    },
+                                    child: _ArchiveMessageCard(
+                                      name: name.isEmpty ? 'Shipment #$shipmentId' : name,
+                                      message: preview.isEmpty ? 'No message' : preview,
+                                      time: time.isEmpty ? 'Archived' : time,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
             ),
           ],
         ),
@@ -247,20 +321,6 @@ class _ArchiveMessageCard extends StatelessWidget {
   }
 }
 
-class _ArchivedMessage {
-  const _ArchivedMessage({
-    required this.phoneNumber,
-    required this.preview,
-    required this.time,
-    required this.conversation,
-  });
-
-  final String phoneNumber;
-  final String preview;
-  final String time;
-  final List<_ArchiveConversationMessage> conversation;
-}
-
 class _ArchiveConversationMessage {
   const _ArchiveConversationMessage({
     required this.text,
@@ -273,17 +333,194 @@ class _ArchiveConversationMessage {
   final bool isDriver;
 }
 
-class ArchiveChatPage extends StatelessWidget {
-  const ArchiveChatPage({
-    super.key,
-    required this.phoneNumber,
-    required this.conversation,
+class _ArchiveMsg {
+  final int id;
+  final String message;
+  final bool isMine;
+  final DateTime? createdAt;
+
+  const _ArchiveMsg({
+    required this.id,
+    required this.message,
+    required this.isMine,
+    this.createdAt,
   });
 
-  final String phoneNumber;
-  final List<_ArchiveConversationMessage> conversation;
+  static _ArchiveMsg fromMap(Map<String, dynamic> json) {
+    final createdAtRaw = json['created_at']?.toString();
+    return _ArchiveMsg(
+      id: json['id'] is int ? json['id'] as int : int.tryParse(json['id']?.toString() ?? '') ?? 0,
+      message: (json['message'] ?? '').toString(),
+      isMine: json['is_mine'] == true,
+      createdAt: createdAtRaw == null ? null : DateTime.tryParse(createdAtRaw)?.toLocal(),
+    );
+  }
+}
+
+class ArchiveChatPage extends StatefulWidget {
+  const ArchiveChatPage({
+    super.key,
+    required this.shipmentId,
+    required this.customerName,
+    this.customerPhone,
+  });
+
+  final int shipmentId;
+  final String customerName;
+  final String? customerPhone;
 
   static const double avatarRadius = 22;
+
+  @override
+  State<ArchiveChatPage> createState() => _ArchiveChatPageState();
+}
+
+class _ArchiveChatPageState extends State<ArchiveChatPage> {
+  final TextEditingController _messageCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
+
+  bool _loading = true;
+  bool _sending = false;
+  String _error = '';
+  List<_ArchiveMsg> _messages = [];
+
+  static const Duration _timeout = Duration(seconds: 15);
+
+  Future<String?> _token() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('driver_token');
+  }
+
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '';
+    final hour24 = dt.hour;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final suffix = hour24 >= 12 ? 'pm' : 'am';
+    final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    return '$hour12:$minute $suffix';
+  }
+
+  Future<void> _loadMessages() async {
+    setState(() => _error = '');
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = 'Missing driver session. Please login again.';
+          _messages = [];
+        });
+        return;
+      }
+      final uri = Uri.parse('${Auth.apiBaseUrl}/driver/shipments/${widget.shipmentId}/messages')
+          .replace(queryParameters: const {'status': 'archive'});
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(_timeout);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      if (res.statusCode != 200 || data['success'] != true || data['data'] is! List) {
+        setState(() {
+          _loading = false;
+          _messages = [];
+          _error = (data['message'] ?? 'Could not load messages.').toString();
+        });
+        return;
+      }
+      final list = (data['data'] as List)
+          .whereType<Map>()
+          .map((e) => _ArchiveMsg.fromMap(Map<String, dynamic>.from(e)))
+          .toList();
+      list.sort((a, b) {
+        final aAt = a.createdAt;
+        final bAt = b.createdAt;
+        if (aAt == null && bAt == null) return a.id.compareTo(b.id);
+        if (aAt == null) return -1;
+        if (bAt == null) return 1;
+        final c = aAt.compareTo(bAt);
+        return c != 0 ? c : a.id.compareTo(b.id);
+      });
+      setState(() {
+        _messages = list;
+        _loading = false;
+        _error = '';
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollCtrl.hasClients) {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _messages = [];
+        _error = 'Could not load messages. Check connection.';
+      });
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _messageCtrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      final token = await _token();
+      if (token == null || token.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Missing driver session. Please login again.')),
+          );
+        }
+        return;
+      }
+      final res = await http.post(
+        Uri.parse('${Auth.apiBaseUrl}/driver/shipments/${widget.shipmentId}/messages'),
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'message': text, 'status': 'archive'}),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
+      if ((res.statusCode == 201 || res.statusCode == 200) && data['success'] == true) {
+        _messageCtrl.clear();
+        await _loadMessages();
+      } else {
+        final msg = (data['message'] ?? 'Could not send message.').toString();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not send message. Check connection.')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+  }
+
+  @override
+  void dispose() {
+    _messageCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -307,7 +544,7 @@ class ArchiveChatPage extends StatelessWidget {
                     onPressed: () => Navigator.pop(context),
                   ),
                   const CircleAvatar(
-                    radius: avatarRadius,
+                    radius: ArchiveChatPage.avatarRadius,
                     backgroundColor: Color(0xFFFFE5E5),
                     child: Icon(
                       Symbols.person,
@@ -318,54 +555,115 @@ class ArchiveChatPage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        phoneNumber,
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.customerName,
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      const Text(
-                        'Completed Delivery',
-                        style: TextStyle(color: Colors.grey, fontSize: 13),
-                      ),
-                    ],
+                        Text(
+                          (widget.customerPhone ?? '').isEmpty
+                              ? 'Shipment #${widget.shipmentId}'
+                              : widget.customerPhone!,
+                          style: const TextStyle(color: Colors.grey, fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 30),
+            const SizedBox(height: 8),
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                child: ListView.separated(
-                  itemCount: conversation.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 20),
-                  itemBuilder: (_, index) {
-                    final message = conversation[index];
-                    return _ArchiveChatBubble(message: message);
-                  },
-                ),
-              ),
+              child: _error.isNotEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _error,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Color(0xFFE3001B)),
+                            ),
+                            const SizedBox(height: 10),
+                            ElevatedButton(
+                              onPressed: _loadMessages,
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _loading && _messages.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Loading messages...',
+                                style: TextStyle(color: Color(0xFF666666), fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _messages.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No messages in this thread.',
+                                style: TextStyle(color: Color(0xFF666666), fontSize: 14),
+                              ),
+                            )
+                          : RefreshIndicator(
+                              onRefresh: _loadMessages,
+                              child: ListView.builder(
+                                controller: _scrollCtrl,
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                itemCount: _messages.length,
+                                itemBuilder: (_, index) {
+                                  final m = _messages[index];
+                                  final bubble = _ArchiveConversationMessage(
+                                    text: m.message,
+                                    time: _formatTime(m.createdAt),
+                                    isDriver: m.isMine,
+                                  );
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 20),
+                                    child: _ArchiveChatBubble(message: bubble),
+                                  );
+                                },
+                              ),
+                            ),
             ),
             Padding(
-              padding: const EdgeInsets.only(
-                top: 0,
-                left: 20,
-                right: 20,
-                bottom: 14,
-              ),
+              padding: const EdgeInsets.only(left: 20, right: 20, bottom: 14),
               child: Row(
                 children: [
                   Expanded(
                     child: TextField(
+                      controller: _messageCtrl,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendMessage(),
                       style: const TextStyle(fontSize: 15),
                       decoration: InputDecoration(
-                        hintText: "Message",
+                        hintText: 'Message',
                         hintStyle: const TextStyle(
                           color: Color(0xFF464646),
                           fontSize: 15,
@@ -389,16 +687,27 @@ class ArchiveChatPage extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   GestureDetector(
-                    onTap: () {},
-                    child: const CircleAvatar(
+                    onTap: _sending ? null : _sendMessage,
+                    child: CircleAvatar(
                       radius: 24,
-                      backgroundColor: Color(0xFFE3001B),
-                      child: Icon(
-                        Symbols.send,
-                        color: Colors.white,
-                        size: 22,
-                        weight: 600,
-                      ),
+                      backgroundColor: _sending
+                          ? const Color(0xFFB56973)
+                          : const Color(0xFFE3001B),
+                      child: _sending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Icon(
+                              Symbols.send,
+                              color: Colors.white,
+                              size: 22,
+                              weight: 600,
+                            ),
                     ),
                   ),
                 ],
