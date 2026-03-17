@@ -78,6 +78,21 @@ class _messagesPageState extends State<messagesPage> {
     return DateTime.tryParse(raw)?.toLocal();
   }
 
+  int _computeUnreadCount(List<dynamic> list) {
+    if (list.isEmpty) return 0;
+    int lastDriverIdx = -1;
+    for (var i = 0; i < list.length; i++) {
+      final m = list[i];
+      if (m is Map && (m['is_mine'] == true)) lastDriverIdx = i;
+    }
+    int unread = 0;
+    for (var i = lastDriverIdx + 1; i < list.length; i++) {
+      final m = list[i];
+      if (m is Map && (m['is_mine'] != true)) unread++;
+    }
+    return unread;
+  }
+
   Future<Map<String, dynamic>?> _fetchLastMessagePreview({
     required int shipmentId,
     required String token,
@@ -103,9 +118,11 @@ class _messagesPageState extends State<messagesPage> {
       if (latest is! Map) return null;
       final msg = (latest['message'] ?? '').toString().trim();
       if (msg.isEmpty) return null;
+      final unreadCount = _computeUnreadCount(list);
       return {
         'message': msg,
         'created_at': latest['created_at'],
+        'unread_count': unreadCount,
       };
     } catch (_) {
       return null;
@@ -178,6 +195,7 @@ class _messagesPageState extends State<messagesPage> {
         final item = Map<String, dynamic>.from(list[i]);
         item['last_message'] = (preview['message'] ?? '').toString();
         item['last_message_at'] = preview['created_at'];
+        item['unread_count'] = (preview['unread_count'] as int?) ?? 0;
         filtered.add(item);
       }
 
@@ -197,6 +215,7 @@ class _messagesPageState extends State<messagesPage> {
           grouped[key] = {
             ...item,
             'shipment_ids': <int>[itemShipmentId],
+            'unread_count': (item['unread_count'] as int?) ?? 0,
           };
           continue;
         }
@@ -206,6 +225,8 @@ class _messagesPageState extends State<messagesPage> {
         final currentIds = List<int>.from(current['shipment_ids'] as List<int>);
         if (!currentIds.contains(itemShipmentId)) currentIds.add(itemShipmentId);
         current['shipment_ids'] = currentIds;
+        current['unread_count'] = ((current['unread_count'] as int?) ?? 0) +
+            ((item['unread_count'] as int?) ?? 0);
 
         final takeNewer = currentAt == null ||
             (itemAt != null && itemAt.isAfter(currentAt));
@@ -371,6 +392,7 @@ class _messagesPageState extends State<messagesPage> {
                                       ? '${rawPreview.substring(0, 47)}...'
                                       : rawPreview;
                                   final subtitle = (thread['delivery_address'] ?? '').toString();
+                                  final unreadCount = (thread['unread_count'] as int?) ?? 0;
                                   return GestureDetector(
                                     onTap: () async {
                                       await Navigator.push(
@@ -391,6 +413,7 @@ class _messagesPageState extends State<messagesPage> {
                                       name: name,
                                       message: preview,
                                       time: subtitle.isEmpty ? 'Shipment #$shipmentId' : subtitle,
+                                      unreadCount: unreadCount,
                                     ),
                                   );
                                 },
@@ -410,79 +433,117 @@ class _MessageCard extends StatelessWidget {
     required this.name,
     required this.message,
     required this.time,
+    this.unreadCount = 0,
   });
 
   final IconData icon;
   final String name;
   final String message;
   final String time;
+  final int unreadCount;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFFFF),
-        borderRadius: BorderRadius.circular(11),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Transform.translate(
-            offset: const Offset(-4, 0),
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFFFF),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Transform.translate(
+                offset: const Offset(-4, 0),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFE7EA),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 22,
+                    color: const Color(0xFFE3001B),
+                    fill: 1,
+                    weight: 600,
+                    grade: 200,
+                    opticalSize: 24,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF1C1B1F),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      time,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF616161)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (unreadCount > 0)
+          Positioned(
+            top: 4,
+            right: 6,
             child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: const BoxDecoration(
-                color: Color(0xFFFFE7EA),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
-                size: 22,
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
                 color: const Color(0xFFE3001B),
-                fill: 1,
-                weight: 600,
-                grade: 200,
-                opticalSize: 24,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.12),
+                    blurRadius: 6,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+              alignment: Alignment.center,
+              child: Text(
+                unreadCount > 99 ? '99+' : '$unreadCount',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  height: 1.0,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  message,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF1C1B1F),
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  time,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF616161)),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+      ],
     );
   }
 }

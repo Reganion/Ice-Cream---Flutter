@@ -54,12 +54,20 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
   bool _loadingShipments = false;
   String _shipmentsError = '';
   List<Map<String, dynamic>> _shipments = [];
+  int _notificationUnreadCount = 0;
 
   @override
   void initState() {
     super.initState();
     _loadDriverProfile();
     _fetchShipments();
+    _fetchNotificationUnreadCount();
+  }
+
+  Future<void> _fetchNotificationUnreadCount() async {
+    final count = await fetchDriverNotificationUnreadCount();
+    if (!mounted) return;
+    setState(() => _notificationUnreadCount = count);
   }
 
   @override
@@ -512,25 +520,53 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
                     ),
                   ),
 
-                  // Bell button
+                  // Bell button with unread badge
                   InkWell(
-                    onTap: () {
-                      Navigator.push(
+                    onTap: () async {
+                      await Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (context) => const NotificationsPage(),
                         ),
                       );
+                      _fetchNotificationUnreadCount();
                     },
                     borderRadius: BorderRadius.circular(999),
-                    child: Container(
-                      width: 42,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFFFFE9EA),
-                      ),
-                      child: const Icon(Icons.notifications, color: kRed),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 44,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color(0xFFFFE9EA),
+                          ),
+                          child: const Icon(Icons.notifications, color: kRed),
+                        ),
+                        if (_notificationUnreadCount > 0)
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: const BoxDecoration(
+                                color: kRed,
+                                shape: BoxShape.circle,
+                              ),
+                              constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                              alignment: Alignment.center,
+                              child: Text(
+                                _notificationUnreadCount > 99 ? '99+' : '$_notificationUnreadCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ],
@@ -907,104 +943,189 @@ class _BottomItem extends StatelessWidget {
   }
 }
 
-class NotificationsPage extends StatelessWidget {
+/// Driver notification item from API.
+class _DriverNotificationItem {
+  final int id;
+  final String title;
+  final String message;
+  final DateTime? createdAt;
+  final DateTime? readAt;
+  final String? relatedType;
+  final int? relatedId;
+
+  const _DriverNotificationItem({
+    required this.id,
+    required this.title,
+    required this.message,
+    this.createdAt,
+    this.readAt,
+    this.relatedType,
+    this.relatedId,
+  });
+
+  bool get isRead => readAt != null;
+}
+
+DateTime? _parseDriverNotifDateTime(dynamic v) {
+  final s = v?.toString().trim();
+  if (s == null || s.isEmpty) return null;
+  return DateTime.tryParse(s)?.toLocal();
+}
+
+Future<List<_DriverNotificationItem>> fetchDriverNotifications() async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('driver_token');
+  if (token == null || token.isEmpty) return [];
+  try {
+    final uri = Uri.parse('${Auth.apiBaseUrl}/driver/notifications')
+        .replace(queryParameters: {'per_page': '50'});
+    final res = await http.get(
+      uri,
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode != 200) return [];
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    if (data == null || data['success'] != true) return [];
+    final list = data['data'] as List<dynamic>? ?? [];
+    final items = <_DriverNotificationItem>[];
+    for (final raw in list.whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final idRaw = item['id'];
+      final id = idRaw is int ? idRaw : int.tryParse(idRaw?.toString() ?? '');
+      if (id == null || id <= 0) continue;
+      final title = (item['title'] ?? '').toString().trim();
+      final message = (item['message'] ?? '').toString().trim();
+      if (title.isEmpty && message.isEmpty) continue;
+      final relatedIdRaw = item['related_id'];
+      final relatedId = relatedIdRaw is int ? relatedIdRaw : int.tryParse(relatedIdRaw?.toString() ?? '');
+      items.add(_DriverNotificationItem(
+        id: id,
+        title: title,
+        message: message,
+        createdAt: _parseDriverNotifDateTime(item['created_at']),
+        readAt: _parseDriverNotifDateTime(item['read_at']),
+        relatedType: item['related_type']?.toString(),
+        relatedId: relatedId,
+      ));
+    }
+    items.sort((a, b) {
+      final aAt = a.createdAt;
+      final bAt = b.createdAt;
+      if (aAt == null && bAt == null) return b.id.compareTo(a.id);
+      if (aAt == null) return 1;
+      if (bAt == null) return -1;
+      return bAt.compareTo(aAt);
+    });
+    return items;
+  } catch (e) {
+    throw Exception('Failed to load notifications: $e');
+  }
+}
+
+Future<int> fetchDriverNotificationUnreadCount() async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('driver_token');
+  if (token == null || token.isEmpty) return 0;
+  try {
+    final res = await http.get(
+      Uri.parse('${Auth.apiBaseUrl}/driver/notifications/unread-count'),
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode != 200) return 0;
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    if (data == null || data['success'] != true) return 0;
+    final raw = data['unread_count'];
+    return raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+Future<bool> deleteAllDriverNotifications() async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('driver_token');
+  if (token == null || token.isEmpty) return false;
+  try {
+    final res = await http.delete(
+      Uri.parse('${Auth.apiBaseUrl}/driver/notifications'),
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode != 200) return false;
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> markDriverNotificationRead({required int notificationId}) async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('driver_token');
+  if (token == null || token.isEmpty) return false;
+  try {
+    final res = await http.post(
+      Uri.parse('${Auth.apiBaseUrl}/driver/notifications/$notificationId/read'),
+      headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode != 200) return false;
+    final data = jsonDecode(res.body) as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
+String _formatDriverNotifTimeAgo(DateTime dt) {
+  final now = DateTime.now();
+  final diff = now.difference(dt);
+  if (diff.inMinutes < 1) return 'Just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}hrs ago';
+  if (diff.inDays < 7) return '${diff.inDays} days ago';
+  return '${dt.month}/${dt.day}/${dt.year}';
+}
+
+class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Top bar
-            Container(
-              color: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              child: Row(
-                children: [
-                  InkWell(
-                    onTap: () => Navigator.pop(context),
-                    borderRadius: BorderRadius.circular(999),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFFF2F2F2),
-                      ),
-                      child: const Icon(
-                        Icons.arrow_back,
-                        size: 21,
-                        color: Colors.black,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  const Text(
-                    "Notifications",
-                    style: TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black,
-                    ),
-                  ),
-                  const Spacer(),
-                  InkWell(
-                    onTap: () => _showDeleteAllNotificationsModal(context),
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      child: const Icon(
-                        Symbols.delete,
-                        size: 22,
-                        color: Colors.black,
-                        fill: 0,
-                        weight: 600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+  State<NotificationsPage> createState() => _NotificationsPageState();
+}
 
-            // Notifications list — SingleChildScrollView so cards always layout and show
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _NotificationCard(
-                      showIndicator: true,
-                      indicatorColor: const Color(0xFFE21B2D),
-                      title: "New order is available!",
-                      message: "Admin just assigned you. Click to see full details.",
-                      time: "Just now",
-                    ),
-                    const SizedBox(height: 14),
-                    _NotificationCard(
-                      showIndicator: true,
-                      indicatorColor: const Color(0xFFCFCFCF),
-                      title: "Delivered Successfully",
-                      message: "Booking has been delivered completely.",
-                      time: "3hrs ago",
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+class _NotificationsPageState extends State<NotificationsPage> {
+  bool _loading = true;
+  String _error = '';
+  List<_DriverNotificationItem> _notifications = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotifications();
   }
 
-  static void _showDeleteAllNotificationsModal(BuildContext context) {
+  Future<void> _loadNotifications() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final list = await fetchDriverNotifications();
+      if (!mounted) return;
+      setState(() {
+        _notifications = list;
+        _loading = false;
+        _error = '';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Could not load notifications. Check connection.';
+      });
+    }
+  }
+
+  void _showDeleteAllModal(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1042,9 +1163,22 @@ class NotificationsPage extends StatelessWidget {
               ),
               const SizedBox(height: 30),
               GestureDetector(
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(context);
-                  // TODO: clear all notifications
+                  final ok = await deleteAllDriverNotifications();
+                  if (!mounted) return;
+                  if (ok) {
+                    await _loadNotifications();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('All notifications deleted successfully.')),
+                      );
+                    }
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Failed to delete notifications.')),
+                    );
+                  }
                 },
                 child: Container(
                   width: double.infinity,
@@ -1090,6 +1224,173 @@ class NotificationsPage extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _onNotificationTap(_DriverNotificationItem item) async {
+    if (!item.isRead) {
+      await markDriverNotificationRead(notificationId: item.id);
+    }
+    if (!mounted) return;
+    final relatedType = (item.relatedType ?? '').toString().toLowerCase();
+    final relatedId = item.relatedId;
+    if ((relatedType == 'shipment' || relatedType == 'order') && relatedId != null && relatedId > 0) {
+      final titleMsg = '${item.title} ${item.message}'.toLowerCase();
+      final isDeliveredSuccess = titleMsg.contains('delivered');
+      Navigator.pop(context);
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => isDeliveredSuccess
+              ? DeliveryViewDetailsPage(
+                  shipmentId: relatedId,
+                )
+              : ConfirmDeliveryPage(
+                  shipmentId: relatedId,
+                  initialShipment: null,
+                ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Top bar
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Row(
+                children: [
+                  InkWell(
+                    onTap: () => Navigator.pop(context),
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFFF2F2F2),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back,
+                        size: 21,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  const Text(
+                    "Notifications",
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black,
+                    ),
+                  ),
+                  const Spacer(),
+                  InkWell(
+                    onTap: _notifications.isEmpty ? null : () => _showDeleteAllModal(context),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Symbols.delete,
+                        size: 22,
+                        color: _notifications.isEmpty ? Colors.grey : Colors.black,
+                        fill: 0,
+                        weight: 600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Notifications list
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : _error.isNotEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _error,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Color(0xFFE3001B)),
+                                ),
+                                const SizedBox(height: 12),
+                                ElevatedButton(
+                                  onPressed: _loadNotifications,
+                                  child: const Text('Retry'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : _notifications.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No notifications yet.',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Color(0xFF747474),
+                                ),
+                              ),
+                            )
+                          : RefreshIndicator(
+                          onRefresh: _loadNotifications,
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ..._notifications.asMap().entries.map((entry) {
+                                  final item = entry.value;
+                                  final title = item.title.isNotEmpty ? item.title : 'Notification';
+                                  final message = item.message;
+                                  final time = item.createdAt != null
+                                      ? _formatDriverNotifTimeAgo(item.createdAt!)
+                                      : '';
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 14),
+                                    child: GestureDetector(
+                                      onTap: () => _onNotificationTap(item),
+                                      child: _NotificationCard(
+                                        showIndicator: !item.isRead,
+                                        indicatorColor: item.isRead
+                                            ? const Color(0xFFCFCFCF)
+                                            : const Color(0xFFE21B2D),
+                                        title: title,
+                                        message: message,
+                                        time: time,
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                            ),
+                          ),
+                        ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

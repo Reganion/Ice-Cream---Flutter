@@ -153,6 +153,7 @@ class DriverOrderThread {
   final String orderLabel;
   final String? preview;
   final DateTime? lastAt;
+  final int unreadCount;
 
   const DriverOrderThread({
     required this.orderId,
@@ -163,6 +164,7 @@ class DriverOrderThread {
     required this.orderLabel,
     this.preview,
     this.lastAt,
+    this.unreadCount = 0,
   });
 
   DriverOrderThread copyWith({
@@ -174,6 +176,7 @@ class DriverOrderThread {
     String? orderLabel,
     String? preview,
     DateTime? lastAt,
+    int? unreadCount,
   }) {
     return DriverOrderThread(
       orderId: orderId ?? this.orderId,
@@ -184,6 +187,7 @@ class DriverOrderThread {
       orderLabel: orderLabel ?? this.orderLabel,
       preview: preview ?? this.preview,
       lastAt: lastAt ?? this.lastAt,
+      unreadCount: unreadCount ?? this.unreadCount,
     );
   }
 }
@@ -218,6 +222,194 @@ class OrderMessageItem {
       createdAt: createdAtRaw == null ? null : DateTime.tryParse(createdAtRaw)?.toLocal(),
     );
   }
+}
+
+class CustomerOrderNotificationItem {
+  final int id;
+  final String? _title;
+  final String? _message;
+  final DateTime? createdAt;
+  final DateTime? readAt;
+  final String? relatedType;
+  final int? relatedId;
+
+  String get title => (_title ?? '').trim();
+  String get message => (_message ?? '').trim();
+  bool get isRead => readAt != null;
+
+  const CustomerOrderNotificationItem({
+    required this.id,
+    String? title,
+    String? message,
+    required this.createdAt,
+    this.readAt,
+    this.relatedType,
+    this.relatedId,
+  })  : _title = title,
+        _message = message;
+
+  CustomerOrderNotificationItem copyWith({
+    DateTime? readAt,
+  }) {
+    return CustomerOrderNotificationItem(
+      id: id,
+      title: title,
+      message: message,
+      createdAt: createdAt,
+      readAt: readAt ?? this.readAt,
+      relatedType: relatedType,
+      relatedId: relatedId,
+    );
+  }
+}
+
+class CustomerNotificationsResult {
+  final List<CustomerOrderNotificationItem> items;
+  final int unreadCount;
+
+  const CustomerNotificationsResult({
+    required this.items,
+    required this.unreadCount,
+  });
+}
+
+Future<CustomerNotificationsResult?> fetchCustomerOrderNotifications() async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return null;
+  final uri = Uri.parse('${Auth.apiBaseUrl}/notifications').replace(
+    queryParameters: {'per_page': '50'},
+  );
+  final res = await http.get(
+    uri,
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  if (res.statusCode != 200) return null;
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  if (data == null || data['success'] != true) return null;
+  final list = data['data'] as List<dynamic>? ?? [];
+
+  final notifications = <CustomerOrderNotificationItem>[];
+  for (final raw in list.whereType<Map>()) {
+    final item = Map<String, dynamic>.from(raw);
+    final idRaw = item['id'];
+    final id = idRaw is int ? idRaw : int.tryParse(idRaw?.toString() ?? '');
+    if (id == null || id <= 0) continue;
+
+    final title = (item['title'] ?? '').toString().trim();
+    final message = (item['message'] ?? '').toString().trim();
+    if (title.isEmpty && message.isEmpty) continue;
+    final relatedIdRaw = item['related_id'];
+    final relatedId = relatedIdRaw is int ? relatedIdRaw : int.tryParse(relatedIdRaw?.toString() ?? '');
+
+    notifications.add(
+      CustomerOrderNotificationItem(
+        id: id,
+        title: title,
+        message: message,
+        createdAt: _parseDateTimeMaybe(item['created_at']),
+        readAt: _parseDateTimeMaybe(item['read_at']),
+        relatedType: item['related_type']?.toString(),
+        relatedId: relatedId,
+      ),
+    );
+  }
+
+  notifications.sort((a, b) {
+    final aAt = a.createdAt;
+    final bAt = b.createdAt;
+    if (aAt == null && bAt == null) return b.id.compareTo(a.id);
+    if (aAt == null) return 1;
+    if (bAt == null) return -1;
+    return bAt.compareTo(aAt);
+  });
+  final unreadRaw = data['unread_count'];
+  final unreadCount = unreadRaw is int
+      ? unreadRaw
+      : int.tryParse(unreadRaw?.toString() ?? '') ?? notifications.where((n) => !n.isRead).length;
+  return CustomerNotificationsResult(items: notifications, unreadCount: unreadCount);
+}
+
+Future<bool> deleteAllCustomerNotifications() async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final res = await http.delete(
+    Uri.parse('${Auth.apiBaseUrl}/notifications'),
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  if (res.statusCode != 200) return false;
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  return data != null && data['success'] == true;
+}
+
+Future<bool> markCustomerNotificationRead({required int notificationId}) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return false;
+  final res = await http.post(
+    Uri.parse('${Auth.apiBaseUrl}/notifications/$notificationId/read'),
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  if (res.statusCode != 200) return false;
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  return data != null && data['success'] == true;
+}
+
+class OrderDetailsData {
+  final int id;
+  final String transactionId;
+  final String productName;
+  final String status;
+  final String deliveryDate;
+  final String deliveryTime;
+  final String deliveryAddress;
+  final String amountFormatted;
+  final int quantity;
+  final String paymentMethod;
+
+  const OrderDetailsData({
+    required this.id,
+    required this.transactionId,
+    required this.productName,
+    required this.status,
+    required this.deliveryDate,
+    required this.deliveryTime,
+    required this.deliveryAddress,
+    required this.amountFormatted,
+    required this.quantity,
+    required this.paymentMethod,
+  });
+
+  factory OrderDetailsData.fromJson(Map<String, dynamic> json) {
+    final amountRaw = (json['amount_formatted'] ?? '').toString().trim();
+    final amount = amountRaw.isNotEmpty ? amountRaw : '₱${(json['amount'] ?? 0).toString()}';
+    final qtyRaw = json['quantity'];
+    final qty = qtyRaw is int ? qtyRaw : int.tryParse(qtyRaw?.toString() ?? '') ?? 1;
+    return OrderDetailsData(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      transactionId: (json['transaction_id'] ?? '').toString(),
+      productName: (json['product_name'] ?? 'Order').toString(),
+      status: (json['status'] ?? '').toString(),
+      deliveryDate: (json['delivery_date'] ?? '').toString(),
+      deliveryTime: (json['delivery_time'] ?? '').toString(),
+      deliveryAddress: (json['delivery_address'] ?? '').toString(),
+      amountFormatted: amount,
+      quantity: qty,
+      paymentMethod: (json['payment_method'] ?? '').toString(),
+    );
+  }
+}
+
+Future<OrderDetailsData?> fetchOrderDetailsById(int orderId) async {
+  final token = await Auth.getToken();
+  if (token == null || token.isEmpty) return null;
+  final res = await http.get(
+    Uri.parse('${Auth.apiBaseUrl}/orders/$orderId'),
+    headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+  );
+  if (res.statusCode != 200) return null;
+  final data = jsonDecode(res.body) as Map<String, dynamic>?;
+  if (data == null || data['success'] != true) return null;
+  final order = data['data'] as Map<String, dynamic>?;
+  return order == null ? null : OrderDetailsData.fromJson(order);
 }
 
 Future<List<OrderMessageItem>?> fetchOrderMessages({
@@ -611,6 +803,11 @@ class _MessagesPageState extends State<MessagesPage> {
   String? _driverError;
   bool _chatRefreshInFlight = false;
   bool _driverRefreshInFlight = false;
+  List<CustomerOrderNotificationItem> _notifications = [];
+  int _notifUnreadCount = 0;
+  bool _notifLoading = true;
+  String? _notifError;
+  bool _notifRefreshInFlight = false;
   /// Selection mode for driver chats: long-press to select threads for delete (archive).
   bool _driverSelectionMode = false;
   final Set<int> _selectedDriverOrderIds = {};
@@ -620,6 +817,7 @@ class _MessagesPageState extends State<MessagesPage> {
     super.initState();
     _loadChatSummary();
     _loadDriverThreads();
+    _loadNotifications();
   }
 
   @override
@@ -651,7 +849,27 @@ class _MessagesPageState extends State<MessagesPage> {
           x.transactionId != y.transactionId ||
           x.orderLabel != y.orderLabel ||
           x.preview != y.preview ||
-          x.lastAt != y.lastAt) {
+          x.lastAt != y.lastAt ||
+          x.unreadCount != y.unreadCount) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _isSameNotifications(
+    List<CustomerOrderNotificationItem> a,
+    List<CustomerOrderNotificationItem> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (x.id != y.id ||
+          x.title != y.title ||
+          x.message != y.message ||
+          x.createdAt != y.createdAt ||
+          x.readAt != y.readAt) {
         return false;
       }
     }
@@ -661,7 +879,17 @@ class _MessagesPageState extends State<MessagesPage> {
   /// Delete button enabled: on Chats tab only when at least one driver thread is selected.
   bool get _isDeleteEnabled {
     if (selectedTab == 0) return _selectedDriverOrderIds.isNotEmpty;
-    return true; // Notifications tab: allow delete all notifications
+    return _notifications.isNotEmpty;
+  }
+
+  /// Number of conversations (chats) with unread messages, for the Chats tab badge.
+  int get _chatUnreadCount {
+    int count = 0;
+    if ((_chatSummary?.unreadCount ?? 0) > 0) count += 1;
+    for (final t in _driverThreads) {
+      if (t.unreadCount > 0) count += 1;
+    }
+    return count;
   }
 
   void _exitDriverSelectionMode() {
@@ -813,6 +1041,19 @@ class _MessagesPageState extends State<MessagesPage> {
     }
   }
 
+  int _computeDriverThreadUnread(List<OrderMessageItem> messages) {
+    if (messages.isEmpty) return 0;
+    int lastCustomerIdx = -1;
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].isMine) lastCustomerIdx = i;
+    }
+    int unread = 0;
+    for (var i = lastCustomerIdx + 1; i < messages.length; i++) {
+      if (!messages[i].isMine) unread++;
+    }
+    return unread;
+  }
+
   Future<void> _hydrateDriverThreadLatestMessages() async {
     if (!mounted) return;
     final current = List<DriverOrderThread>.from(_driverThreads);
@@ -822,23 +1063,26 @@ class _MessagesPageState extends State<MessagesPage> {
     final targets = current.where((t) => t.orderId > 0).take(10).toList();
     if (targets.isEmpty) return;
     final latestByOrder = <int, OrderMessageItem>{};
+    final unreadByOrder = <int, int>{};
 
     await Future.wait(targets.map((t) async {
-      // Backend returns ascending by created_at, so fetch a page and take the last item as newest.
-      final latest = await fetchOrderMessages(orderId: t.orderId, perPage: 100);
-      if (latest != null && latest.isNotEmpty) {
-        latestByOrder[t.orderId] = latest.last;
+      final list = await fetchOrderMessages(orderId: t.orderId, perPage: 100);
+      if (list != null && list.isNotEmpty) {
+        latestByOrder[t.orderId] = list.last;
+        unreadByOrder[t.orderId] = _computeDriverThreadUnread(list);
       }
     }));
 
-    if (!mounted || latestByOrder.isEmpty) return;
+    if (!mounted) return;
     final updated = current.map((t) {
       final latest = latestByOrder[t.orderId];
-      if (latest == null) return t;
-      final msg = latest.message.trim();
+      final unread = unreadByOrder[t.orderId] ?? 0;
+      if (latest == null && unread == 0) return t;
+      final msg = latest?.message.trim() ?? '';
       return t.copyWith(
         preview: msg.isNotEmpty ? msg : (t.preview ?? ''),
-        lastAt: latest.createdAt ?? t.lastAt,
+        lastAt: latest?.createdAt ?? t.lastAt,
+        unreadCount: unread,
       );
     }).toList();
 
@@ -868,6 +1112,170 @@ class _MessagesPageState extends State<MessagesPage> {
     } finally {
       _driverRefreshInFlight = false;
     }
+  }
+
+  Future<void> _loadNotifications() async {
+    if (_notifRefreshInFlight) return;
+    _notifRefreshInFlight = true;
+    setState(() {
+      _notifLoading = true;
+      _notifError = null;
+    });
+    try {
+      final result = await fetchCustomerOrderNotifications();
+      if (mounted) {
+        final next = result?.items ?? <CustomerOrderNotificationItem>[];
+        final unread = result?.unreadCount ?? next.where((n) => !n.isRead).length;
+        final changed = !_isSameNotifications(_notifications, next);
+        setState(() {
+          if (changed || _notifLoading || _notifError != null) {
+            _notifications = next;
+          }
+          _notifUnreadCount = unread;
+          _notifLoading = false;
+          _notifError = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _notifLoading = false;
+          _notifError = e.toString();
+        });
+      }
+    } finally {
+      _notifRefreshInFlight = false;
+    }
+  }
+
+  Future<void> _openNotificationOrder(CustomerOrderNotificationItem item) async {
+    if (!item.isRead) {
+      final ok = await markCustomerNotificationRead(notificationId: item.id);
+      if (ok && mounted) {
+        setState(() {
+          _notifications = _notifications.map((n) {
+            if (n.id == item.id) return n.copyWith(readAt: DateTime.now());
+            return n;
+          }).toList();
+          _notifUnreadCount = (_notifUnreadCount - 1).clamp(0, 999999);
+        });
+      }
+    }
+
+    final relatedType = (item.relatedType ?? '').toLowerCase();
+    final orderId = item.relatedId;
+    if (relatedType != 'order' || orderId == null || orderId <= 0) {
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NotificationOrderDetailsPage(orderId: orderId),
+      ),
+    );
+    if (mounted) await _loadNotifications();
+  }
+
+  Widget _buildNotificationsUnreadBadge() {
+    if (_notifUnreadCount <= 0) return const SizedBox.shrink();
+    final text = _notifUnreadCount > 99 ? '99+' : '$_notifUnreadCount';
+    final isWide = text.length >= 3;
+    final isNotificationsActive = selectedTab == 1;
+    final badgeBg = isNotificationsActive ? Colors.white : const Color(0xFFE3001B);
+    final textColor = isNotificationsActive ? const Color(0xFFE3001B) : Colors.white;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.symmetric(
+        horizontal: isWide ? 6 : 5,
+        vertical: 1,
+      ),
+      constraints: BoxConstraints(
+        minWidth: isWide ? 22 : 18,
+        minHeight: 18,
+      ),
+      decoration: BoxDecoration(
+        color: badgeBg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isNotificationsActive ? const Color(0xFFE3001B) : const Color(0xFFFFD0D6),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.14),
+            blurRadius: 6,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: textColor,
+            fontSize: 10,
+            height: 1.1,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChatsUnreadBadge() {
+    final count = _chatUnreadCount;
+    if (count <= 0) return const SizedBox.shrink();
+    final text = count > 99 ? '99+' : '$count';
+    final isWide = text.length >= 3;
+    final isChatsActive = selectedTab == 0;
+    final badgeBg = isChatsActive ? Colors.white : const Color(0xFFE3001B);
+    final textColor = isChatsActive ? const Color(0xFFE3001B) : Colors.white;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.symmetric(
+        horizontal: isWide ? 6 : 5,
+        vertical: 1,
+      ),
+      constraints: BoxConstraints(
+        minWidth: isWide ? 22 : 18,
+        minHeight: 18,
+      ),
+      decoration: BoxDecoration(
+        color: badgeBg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isChatsActive ? const Color(0xFFE3001B) : const Color(0xFFFFD0D6),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.14),
+            blurRadius: 6,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: textColor,
+            fontSize: 10,
+            height: 1.1,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -930,18 +1338,29 @@ class _MessagesPageState extends State<MessagesPage> {
                             : const Color(0xFFFCE8E9), // inactive bg
                         borderRadius: BorderRadius.circular(30),
                       ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        "Chats",
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: selectedTab == 0
-                              ? Colors.white
-                              : const Color(0xFF1C1B1F), // inactive text
-                          fontWeight: selectedTab == 0
-                              ? FontWeight.w400
-                              : FontWeight.w400,
-                        ),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Align(
+                            alignment: Alignment.center,
+                            child: Text(
+                              "Chats",
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: selectedTab == 0
+                                    ? Colors.white
+                                    : const Color(0xFF1C1B1F), // inactive text
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                          if (_chatUnreadCount > 0)
+                            Positioned(
+                              top: -4,
+                              right: 6,
+                              child: _buildChatsUnreadBadge(),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -986,6 +1405,12 @@ class _MessagesPageState extends State<MessagesPage> {
                               ),
                             ),
                           ),
+                          if (_notifUnreadCount > 0)
+                            Positioned(
+                              top: -4,
+                              right: 6,
+                              child: _buildNotificationsUnreadBadge(),
+                            ),
 
                         ],
                       ),
@@ -1007,6 +1432,8 @@ class _MessagesPageState extends State<MessagesPage> {
                       _loadChatSummary(),
                       _loadDriverThreads(),
                     ]);
+                  } else {
+                    await _loadNotifications();
                   }
                 },
                 child: ListView(
@@ -1063,6 +1490,7 @@ class _MessagesPageState extends State<MessagesPage> {
                                       _chatSummary!.lastMessage!.createdAt,
                                     )
                                   : '',
+                              unreadCount: _chatSummary?.unreadCount ?? 0,
                             ),
                           ),
                       const SizedBox(height: 10),
@@ -1122,6 +1550,7 @@ class _MessagesPageState extends State<MessagesPage> {
                                             : '',
                                         isSelectionMode: _driverSelectionMode,
                                         isSelected: _selectedDriverOrderIds.contains(thread.orderId),
+                                        unreadCount: thread.unreadCount,
                                       ),
                                     ),
                                   ),
@@ -1131,44 +1560,63 @@ class _MessagesPageState extends State<MessagesPage> {
                       ],
                       const SizedBox(height: 10),
                     ] else ...[
-                    notificationCard(
-                      message:
-                          "Your order Strawberry has been successfully delivered.",
-                      time: "1 minute ago",
-                      isFirst: true,
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your order Mango Graham has been cancelled.",
-                      time: "4 hours ago",
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your personal has been updated.",
-                      time: "4:15 pm",
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your order Ube Cheese has been cancelled.",
-                      time: "6 hours ago",
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your order Mango Graham has been cancelled.",
-                      time: "4 hours ago",
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your personal has been updated.",
-                      time: "4:15 pm",
-                    ),
-                    const SizedBox(height: 13),
-                    notificationCard(
-                      message: "Your order Ube Cheese has been cancelled.",
-                      time: "6 hours ago",
-                    ),
-                    const SizedBox(height: 13),
-                  ],
+                      if (_notifLoading)
+                        const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      else if (_notifError != null)
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            children: [
+                              Text(
+                                _notifError!,
+                                style: const TextStyle(color: Colors.red),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 12),
+                              TextButton(
+                                onPressed: _loadNotifications,
+                                child: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (_notifications.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 30),
+                          child: Center(
+                            child: Text(
+                              'Notifications will appear here.',
+                              style: TextStyle(color: Color(0xFF747474)),
+                            ),
+                          ),
+                        )
+                      else ...[
+                        ..._notifications.asMap().entries.map((entry) {
+                          final index = entry.key;
+                          final item = entry.value;
+                          final notifText = item.title.isNotEmpty
+                              ? '${item.title}: ${item.message}'
+                              : item.message;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 13),
+                            child: GestureDetector(
+                              onTap: () => _openNotificationOrder(item),
+                              child: notificationCard(
+                                message: notifText,
+                                time: item.createdAt != null
+                                    ? formatMessageTimeAgo(item.createdAt!)
+                                    : '',
+                                isFirst: index == 0,
+                                isUnread: !item.isRead,
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ],
                 ],
                 ),
               ),
@@ -1238,7 +1686,22 @@ class _MessagesPageState extends State<MessagesPage> {
                   if (selectedTab == 0 && _selectedDriverOrderIds.isNotEmpty) {
                     await _archiveSelectedDriverThreads();
                   }
-                  // Notifications tab: delete-all logic can be added here if needed
+                  if (selectedTab == 1) {
+                    final ok = await deleteAllCustomerNotifications();
+                    if (!mounted) return;
+                    if (ok) {
+                      await _loadNotifications();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('All notifications deleted successfully.')),
+                        );
+                      }
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Failed to delete notifications.')),
+                      );
+                    }
+                  }
                 },
                 child: Container(
                   width: double.infinity,
@@ -1353,6 +1816,7 @@ class _MessagesPageState extends State<MessagesPage> {
     required String time,
     bool isSelectionMode = false,
     bool isSelected = false,
+    int unreadCount = 0,
   })
 
 {
@@ -1389,88 +1853,124 @@ class _MessagesPageState extends State<MessagesPage> {
     iconOpticalSize = 24;
   }
 
-  return Container(
-    padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFFFFFF),
-      borderRadius: BorderRadius.circular(11),
-      border: isSelectionMode && isSelected
-          ? Border.all(color: const Color(0xFFE3001B), width: 2)
-          : null,
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (isSelectionMode) ...[
-          Padding(
-            padding: const EdgeInsets.only(right: 10),
-            child: Icon(
-              isSelected ? Symbols.check_circle : Symbols.radio_button_unchecked,
-              size: 24,
-              color: isSelected ? const Color(0xFFE3001B) : Colors.grey,
-              fill: isSelected ? 1 : 0,
-            ),
-          ),
-        ],
-        Transform.translate(
-          offset: const Offset(-4, 0),
-          child: Container(
-            padding: EdgeInsets.all(containerPadding),
-            decoration: const BoxDecoration(
-              color: Color(0xFFFFE7EA),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              displayedIcon,
-              size: iconSize,
-              color: const Color(0xFFE3001B),
-
-              // ✅ Material Symbols variations (matches your CSS)
-              fill: iconFill,
-              weight: iconWeight,
-              grade: iconGrade,
-              opticalSize: iconOpticalSize,
-            ),
-          ),
+  return Stack(
+    clipBehavior: Clip.none,
+    children: [
+      Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFFFF),
+          borderRadius: BorderRadius.circular(11),
+          border: isSelectionMode && isSelected
+              ? Border.all(color: const Color(0xFFE3001B), width: 2)
+              : null,
         ),
-        const SizedBox(width: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isSelectionMode) ...[
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Icon(
+                  isSelected ? Symbols.check_circle : Symbols.radio_button_unchecked,
+                  size: 24,
+                  color: isSelected ? const Color(0xFFE3001B) : Colors.grey,
+                  fill: isSelected ? 1 : 0,
+                ),
+              ),
+            ],
+            Transform.translate(
+              offset: const Offset(-4, 0),
+              child: Container(
+                padding: EdgeInsets.all(containerPadding),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFE7EA),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  displayedIcon,
+                  size: iconSize,
+                  color: const Color(0xFFE3001B),
 
-        Expanded(
-          child: Transform.translate(
-            offset: const Offset(0, -4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  // ✅ Material Symbols variations (matches your CSS)
+                  fill: iconFill,
+                  weight: iconWeight,
+                  grade: iconGrade,
+                  opticalSize: iconOpticalSize,
                 ),
-                Text(
-                  message,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF1C1B1F),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 10),
+
+            Expanded(
+              child: Transform.translate(
+                offset: const Offset(0, -4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    Text(
+                      message,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF1C1B1F),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        time,
+                        style: const TextStyle(fontSize: 12, color: Colors.black45),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    time,
-                    style: const TextStyle(fontSize: 12, color: Colors.black45),
-                  ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (unreadCount > 0)
+        Positioned(
+          top: 4,
+          right: 6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE3001B),
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 6,
+                  offset: const Offset(0, 1),
                 ),
               ],
             ),
+            constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+            alignment: Alignment.center,
+            child: Text(
+              unreadCount > 99 ? '99+' : '$unreadCount',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                height: 1.0,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ),
-      ],
-    ),
+    ],
   );
 }
 
@@ -1478,11 +1978,12 @@ class _MessagesPageState extends State<MessagesPage> {
     required String message,
     required String time,
     bool isFirst = false,
+    bool isUnread = false,
   }) {
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isUnread ? const Color(0xFFFFF6F6) : Colors.white,
         borderRadius: BorderRadius.circular(11),
         boxShadow: isFirst
             ? [
@@ -1534,7 +2035,7 @@ class _MessagesPageState extends State<MessagesPage> {
                 style: const TextStyle(
                   fontSize: 14,
                   color: Color(0xFF1C1B1F),
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w600,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -1608,6 +2109,151 @@ class _BottomIcon extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class NotificationOrderDetailsPage extends StatefulWidget {
+  final int orderId;
+
+  const NotificationOrderDetailsPage({
+    super.key,
+    required this.orderId,
+  });
+
+  @override
+  State<NotificationOrderDetailsPage> createState() => _NotificationOrderDetailsPageState();
+}
+
+class _NotificationOrderDetailsPageState extends State<NotificationOrderDetailsPage> {
+  bool _loading = true;
+  String? _error;
+  OrderDetailsData? _order;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await fetchOrderDetailsById(widget.orderId);
+      if (!mounted) return;
+      if (data == null) {
+        setState(() {
+          _loading = false;
+          _error = 'Order details not found.';
+        });
+        return;
+      }
+      setState(() {
+        _order = data;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  String _label(String raw) {
+    final s = raw.replaceAll('_', ' ').trim();
+    if (s.isEmpty) return '—';
+    return s[0].toUpperCase() + s.substring(1);
+  }
+
+  Widget _row(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF747474),
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value.trim().isEmpty ? '—' : value,
+              style: const TextStyle(
+                color: Color(0xFF1C1B1F),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Order Details'),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+      ),
+      backgroundColor: const Color(0xFFF8F8F8),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
+                      const SizedBox(height: 12),
+                      TextButton(onPressed: _load, child: const Text('Retry')),
+                    ],
+                  ),
+                )
+              : _order == null
+                  ? const Center(child: Text('Order details not found.'))
+                  : ListView(
+                      padding: const EdgeInsets.all(18),
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _row('Order ID', '#${_order!.id}'),
+                              _row('Transaction', _order!.transactionId),
+                              _row('Product', _order!.productName),
+                              _row('Status', _label(_order!.status)),
+                              _row('Quantity', _order!.quantity.toString()),
+                              _row('Amount', _order!.amountFormatted),
+                              _row('Payment', _order!.paymentMethod),
+                              _row('Delivery date', _order!.deliveryDate),
+                              _row('Delivery time', _order!.deliveryTime),
+                              _row('Delivery address', _order!.deliveryAddress),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
     );
   }
 }
