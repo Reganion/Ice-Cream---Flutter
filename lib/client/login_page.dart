@@ -8,6 +8,7 @@ import 'landing_page.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:ice_cream/services/fcm_push_service.dart';
 
 
 enum SuffixIconType { clear, visibility }
@@ -108,6 +109,17 @@ Future<void> _signInWithGoogle() async {
     final data = jsonDecode(response.body);
 
     if (response.statusCode == 200 && data['success'] == true) {
+      final token = (data['token'] ?? '').toString();
+      final customer = data['customer'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(data['customer'] as Map)
+          : <String, dynamic>{};
+      if (token.isNotEmpty) {
+        await Auth.saveSession(
+          token: token,
+          customer: customer,
+        );
+        await FcmPushService.syncCustomerToken();
+      }
       if (!mounted) return;
 
       Navigator.pushReplacement(

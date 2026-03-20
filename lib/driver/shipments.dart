@@ -1,8 +1,13 @@
 import 'dart:convert';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/firebase_rtdb_config.dart';
+import 'package:ice_cream/services/fcm_push_service.dart';
+import 'package:ice_cream/services/last_updated_rtdb_listener.dart';
+import 'package:ice_cream/services/rtdb_user_context.dart';
 import 'package:ice_cream/driver/delivery/complete_delivery.dart';
 import 'package:ice_cream/driver/delivery/confirm_delivery.dart';
 import 'package:ice_cream/driver/delivery/view_details.dart';
@@ -10,7 +15,13 @@ import 'package:ice_cream/driver/message/messages.dart';
 import 'package:ice_cream/driver/profile/profile.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-void main() => runApp(const MyApp());
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await FcmPushService.initialize();
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -55,6 +66,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
   String _shipmentsError = '';
   List<Map<String, dynamic>> _shipments = [];
   int _notificationUnreadCount = 0;
+  LastUpdatedRtdbListener? _driverNotifRtdb;
 
   @override
   void initState() {
@@ -62,6 +74,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
     _loadDriverProfile();
     _fetchShipments();
     _fetchNotificationUnreadCount();
+    _attachDriverNotificationsRtdb();
   }
 
   Future<void> _fetchNotificationUnreadCount() async {
@@ -70,8 +83,24 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
     setState(() => _notificationUnreadCount = count);
   }
 
+  Future<void> _attachDriverNotificationsRtdb() async {
+    final id = await resolveDriverId();
+    if (!mounted || id == null) return;
+    _driverNotifRtdb?.dispose();
+    _driverNotifRtdb = LastUpdatedRtdbListener(
+      database: firebaseRtdb(),
+      path: 'driver_notifications/$id/last_updated',
+      debounce: const Duration(milliseconds: 450),
+      onTick: () {
+        if (!mounted) return;
+        _fetchNotificationUnreadCount();
+      },
+    )..start();
+  }
+
   @override
   void dispose() {
+    _driverNotifRtdb?.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -167,6 +196,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
         final img = driver['image_url'] ?? driver['image'];
         _driverImageUrl = img != null ? img.toString() : null;
       });
+      _attachDriverNotificationsRtdb();
     } catch (_) {}
   }
 
@@ -1096,11 +1126,45 @@ class _NotificationsPageState extends State<NotificationsPage> {
   bool _loading = true;
   String _error = '';
   List<_DriverNotificationItem> _notifications = [];
+  LastUpdatedRtdbListener? _driverNotifRtdb;
 
   @override
   void initState() {
     super.initState();
     _loadNotifications();
+    _attachDriverNotificationsRtdb();
+  }
+
+  @override
+  void dispose() {
+    _driverNotifRtdb?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _attachDriverNotificationsRtdb() async {
+    final id = await resolveDriverId();
+    if (!mounted || id == null) return;
+    _driverNotifRtdb?.dispose();
+    _driverNotifRtdb = LastUpdatedRtdbListener(
+      database: firebaseRtdb(),
+      path: 'driver_notifications/$id/last_updated',
+      debounce: const Duration(milliseconds: 450),
+      onTick: () {
+        if (!mounted) return;
+        _refreshNotificationsSilent();
+      },
+    )..start();
+  }
+
+  Future<void> _refreshNotificationsSilent() async {
+    try {
+      final list = await fetchDriverNotifications();
+      if (!mounted) return;
+      setState(() {
+        _notifications = list;
+        _error = '';
+      });
+    } catch (_) {}
   }
 
   Future<void> _loadNotifications() async {

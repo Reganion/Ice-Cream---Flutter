@@ -1,17 +1,24 @@
 import 'dart:convert';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/landing_page.dart';
 import 'package:ice_cream/driver/forgot_password.dart';
 import 'package:ice_cream/driver/shipments.dart';
+import 'package:ice_cream/services/fcm_push_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Define the shared input background for both inputs and the page.
 const Color _inputBgColor = Colors.white; // <- use any matching color if needed
 
-void main() => runApp(const MyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await FcmPushService.initialize();
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -68,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final token = prefs.getString('driver_token');
     if (token == null || token.isEmpty) return;
 
+    await FcmPushService.clearDriverToken();
     try {
       await http.post(
         Uri.parse('${Auth.apiBaseUrl}/driver/logout'),
@@ -140,6 +148,7 @@ class _LoginScreenState extends State<LoginScreen> {
           if (driver != null) {
             await prefs.setString('driver_profile', jsonEncode(driver));
           }
+          await FcmPushService.syncDriverToken();
         }
 
         if (!mounted) return;

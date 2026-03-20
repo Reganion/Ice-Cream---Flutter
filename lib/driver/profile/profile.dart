@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/driver/login.dart';
+import 'package:ice_cream/services/fcm_push_service.dart';
 import 'package:ice_cream/driver/profile/edit_email_address_page.dart';
 import 'package:ice_cream/driver/profile/edit_password_page.dart';
 import 'package:ice_cream/driver/profile/edit_phone_number_page.dart';
@@ -124,6 +125,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('driver_token');
+    await FcmPushService.clearDriverToken();
     if (token != null && token.isNotEmpty) {
       try {
         await http.post(

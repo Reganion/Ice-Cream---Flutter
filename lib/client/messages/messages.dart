@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/firebase_rtdb_config.dart';
+import 'package:ice_cream/services/last_updated_rtdb_listener.dart';
+import 'package:ice_cream/services/rtdb_user_context.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:ice_cream/client/favorite/favorite.dart';
 import 'package:ice_cream/client/home_page.dart';
@@ -812,17 +815,84 @@ class _MessagesPageState extends State<MessagesPage> {
   bool _driverSelectionMode = false;
   final Set<int> _selectedDriverOrderIds = {};
 
+  LastUpdatedRtdbListener? _customerNotifRtdb;
+  LastUpdatedRtdbListener? _customerChatRtdb;
+  final Map<int, LastUpdatedRtdbListener> _orderMsgsRtdb = {};
+  int? _rtdbCustomerId;
+
   @override
   void initState() {
     super.initState();
     _loadChatSummary();
     _loadDriverThreads();
     _loadNotifications();
+    _attachCustomerRtdbListeners();
   }
 
   @override
   void dispose() {
+    _customerNotifRtdb?.dispose();
+    _customerChatRtdb?.dispose();
+    for (final l in _orderMsgsRtdb.values) {
+      l.dispose();
+    }
+    _orderMsgsRtdb.clear();
     super.dispose();
+  }
+
+  Future<void> _attachCustomerRtdbListeners() async {
+    final id = await resolveCustomerId();
+    if (!mounted || id == null) return;
+    _rtdbCustomerId = id;
+    final db = firebaseRtdb();
+
+    _customerNotifRtdb?.dispose();
+    _customerNotifRtdb = LastUpdatedRtdbListener(
+      database: db,
+      path: 'notifications/$id/last_updated',
+      debounce: const Duration(milliseconds: 450),
+      onTick: () {
+        if (!mounted) return;
+        _refreshNotificationsSilent();
+      },
+    )..start();
+
+    _customerChatRtdb?.dispose();
+    _customerChatRtdb = LastUpdatedRtdbListener(
+      database: db,
+      path: 'chats/$id/last_updated',
+      debounce: const Duration(milliseconds: 450),
+      onTick: () {
+        if (!mounted) return;
+        _refreshChatSummarySilent();
+      },
+    )..start();
+
+    _syncOrderMessageRtdbListeners();
+  }
+
+  void _syncOrderMessageRtdbListeners() {
+    if (_rtdbCustomerId == null || _rtdbCustomerId! <= 0) return;
+    final db = firebaseRtdb();
+    final ids = _driverThreads.map((t) => t.orderId).where((id) => id > 0).take(30).toSet();
+    for (final oid in _orderMsgsRtdb.keys.toList()) {
+      if (!ids.contains(oid)) {
+        _orderMsgsRtdb.remove(oid)?.dispose();
+      }
+    }
+    for (final oid in ids) {
+      if (_orderMsgsRtdb.containsKey(oid)) continue;
+      _orderMsgsRtdb[oid] = LastUpdatedRtdbListener(
+        database: db,
+        path: 'order_messages/$oid/last_updated',
+        debounce: const Duration(milliseconds: 500),
+        onTick: () {
+          if (!mounted) return;
+          _refreshDriverThreadsSilent();
+          _hydrateDriverThreadLatestMessages();
+        },
+      )..start();
+    }
   }
 
   bool _isSameSummary(ChatSummary? a, ChatSummary? b) {
@@ -1029,6 +1099,7 @@ class _MessagesPageState extends State<MessagesPage> {
         }
       }
       _hydrateDriverThreadLatestMessages();
+      _syncOrderMessageRtdbListeners();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -1107,6 +1178,7 @@ class _MessagesPageState extends State<MessagesPage> {
         }
         // Hydrate previews (latest message text) when returning from a chat
         _hydrateDriverThreadLatestMessages();
+        _syncOrderMessageRtdbListeners();
       }
     } catch (_) {
     } finally {
@@ -1143,6 +1215,32 @@ class _MessagesPageState extends State<MessagesPage> {
           _notifError = e.toString();
         });
       }
+    } finally {
+      _notifRefreshInFlight = false;
+    }
+  }
+
+  /// Background refresh when RTDB `notifications/{customerId}/last_updated` changes.
+  Future<void> _refreshNotificationsSilent() async {
+    if (_notifRefreshInFlight) return;
+    _notifRefreshInFlight = true;
+    try {
+      final result = await fetchCustomerOrderNotifications();
+      if (!mounted) return;
+      final next = result?.items ?? <CustomerOrderNotificationItem>[];
+      final unread = result?.unreadCount ?? next.where((n) => !n.isRead).length;
+      final changed = !_isSameNotifications(_notifications, next);
+      if (changed || _notifError != null) {
+        setState(() {
+          _notifications = next;
+          _notifUnreadCount = unread;
+          _notifError = null;
+        });
+      } else {
+        setState(() => _notifUnreadCount = unread);
+      }
+    } catch (_) {
+      // keep existing list on silent failure
     } finally {
       _notifRefreshInFlight = false;
     }
@@ -2275,6 +2373,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   bool _sending = false;
+  LastUpdatedRtdbListener? _supportChatRtdb;
 
   @override
   void initState() {
@@ -2282,14 +2381,31 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _loadMessages();
     markChatRead();
+    _attachSupportChatRtdb();
   }
 
   @override
   void dispose() {
+    _supportChatRtdb?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _attachSupportChatRtdb() async {
+    final id = await resolveCustomerId();
+    if (!mounted || id == null) return;
+    _supportChatRtdb?.dispose();
+    _supportChatRtdb = LastUpdatedRtdbListener(
+      database: firebaseRtdb(),
+      path: 'chats/$id/last_updated',
+      debounce: const Duration(milliseconds: 450),
+      onTick: () {
+        if (!mounted) return;
+        _loadMessages(silent: true);
+      },
+    )..start();
   }
 
   @override
@@ -2300,11 +2416,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _loadMessages() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _loadMessages({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final list = await fetchChatMessages(perPage: 100);
       if (mounted) {
@@ -2317,10 +2435,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = e.toString();
-        });
+        if (silent) {
+          setState(() => _loading = false);
+        } else {
+          setState(() {
+            _loading = false;
+            _error = e.toString();
+          });
+        }
       }
     }
   }
@@ -2700,6 +2822,7 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
   bool _selectionMode = false;
   final Set<int> _selectedMessageIds = {};
   bool _archiving = false;
+  final Map<int, LastUpdatedRtdbListener> _orderMsgsRtdb = {};
 
   @override
   void initState() {
@@ -2708,14 +2831,41 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
     _activeOrderId = widget.orderId;
     _loadMessages();
     _markAllRelatedMessagesRead();
+    _attachOrderMessagesRtdb();
   }
 
   @override
   void dispose() {
+    for (final l in _orderMsgsRtdb.values) {
+      l.dispose();
+    }
+    _orderMsgsRtdb.clear();
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _attachOrderMessagesRtdb() {
+    final db = firebaseRtdb();
+    final ids = _orderIds.toSet();
+    for (final k in _orderMsgsRtdb.keys.toList()) {
+      if (!ids.contains(k)) {
+        _orderMsgsRtdb.remove(k)?.dispose();
+      }
+    }
+    for (final oid in ids) {
+      if (_orderMsgsRtdb.containsKey(oid)) continue;
+      _orderMsgsRtdb[oid] = LastUpdatedRtdbListener(
+        database: db,
+        path: 'order_messages/$oid/last_updated',
+        debounce: const Duration(milliseconds: 450),
+        onTick: () {
+          if (!mounted) return;
+          _loadMessages(silent: true);
+        },
+      )..start();
+    }
   }
 
   @override
@@ -2723,6 +2873,7 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       _loadMessages();
+      _attachOrderMessagesRtdb();
     }
   }
 
@@ -2761,11 +2912,13 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
     return input;
   }
 
-  Future<void> _loadMessages() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _loadMessages({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final merged = <OrderMessageItem>[];
       for (final id in _orderIds) {
@@ -2786,10 +2939,14 @@ class _DriverOrderChatPageState extends State<DriverOrderChatPage>
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = e.toString();
-        });
+        if (silent) {
+          setState(() => _loading = false);
+        } else {
+          setState(() {
+            _loading = false;
+            _error = e.toString();
+          });
+        }
       }
     }
   }

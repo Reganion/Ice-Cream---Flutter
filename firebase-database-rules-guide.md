@@ -90,3 +90,78 @@ So you don’t *have* to change rules if you’re fine without real-time updates
 | Fix (no Firebase in driver) | Keep the current code: driver chat uses only the HTTP API and refresh; no Firebase listener, so no permission error. |
 
 If you tell me whether drivers use Firebase Auth and whether you want real-time updates, I can give you an exact rules snippet for your case.
+
+---
+
+## `last_updated` listeners (Flutter + Laravel)
+
+The app listens to **small stamp nodes** written by Laravel, then **reloads from the REST API** (MySQL is source of truth).
+
+### Paths in use
+
+| Area | Path |
+|------|------|
+| Customer notifications | `notifications/{customerId}/last_updated` |
+| Driver notifications | `driver_notifications/{driverId}/last_updated` |
+| Support chat (customer) | `chats/{customerId}/last_updated` |
+| Order ↔ driver messages | `order_messages/{id}/last_updated` — **`id` must match whatever Laravel uses** (often the same id you pass to `/orders/{id}/messages` or `/driver/shipments/{id}/messages`) |
+
+### Security rules (read-only clients)
+
+- Clients should have **`.read` only** on these paths; **writes stay on the server** (Kreait Admin SDK bypasses rules).
+- If you do **not** use Firebase Authentication in the app, the client is anonymous to Firebase — you must either turn on Firebase Auth or use rules that match your risk tolerance (see warnings in this doc).
+
+**Example: read `last_updated` + deny client writes (adjust `auth` checks for your app):**
+
+```json
+{
+  "rules": {
+    "notifications": {
+      "$customerId": {
+        "last_updated": {
+          ".read": true,
+          ".write": false
+        },
+        "items": {
+          "$id": {
+            ".read": true,
+            ".write": false
+          }
+        }
+      }
+    },
+    "driver_notifications": {
+      "$driverId": {
+        "last_updated": {
+          ".read": true,
+          ".write": false
+        },
+        "items": {
+          "$id": {
+            ".read": true,
+            ".write": false
+          }
+        }
+      }
+    },
+    "chats": {
+      "$customerId": {
+        "last_updated": {
+          ".read": true,
+          ".write": false
+        }
+      }
+    },
+    "order_messages": {
+      "$threadId": {
+        "last_updated": {
+          ".read": true,
+          ".write": false
+        }
+      }
+    }
+  }
+}
+```
+
+Replace `.read: true` with `auth != null` (or custom claims) when your users sign in with **Firebase** Auth. If they only use Laravel JWT, Firebase still sees them as unauthenticated unless you add a Firebase sign-in flow or custom token minting on the server.

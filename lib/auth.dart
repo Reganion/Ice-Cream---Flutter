@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:ice_cream/services/fcm_push_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Laravel API base URL (includes /api/v1).
@@ -50,6 +51,17 @@ class Auth {
   static Future<void> _clearCustomerCache() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_customerCacheKey);
+  }
+
+  /// Save token/customer to local storage (used by non-standard login flows like Google login).
+  static Future<void> saveSession({
+    required String token,
+    Map<String, dynamic>? customer,
+  }) async {
+    await _saveToken(token);
+    if (customer != null && customer.isNotEmpty) {
+      await _saveCustomerCache(customer);
+    }
   }
 
   /// Extracts auth token from API response (supports token, access_token, auth_token, and nested data).
@@ -109,6 +121,7 @@ class Auth {
       // Treat as success if API says so, or we got a token, or we got customer (so profile works)
       final isSuccess = data['success'] == true || token != null || customerData.isNotEmpty;
       if (isSuccess) {
+        await FcmPushService.syncCustomerToken();
         return {'success': true, 'customer': customerData};
       }
     }
@@ -903,6 +916,7 @@ class Auth {
   /// so profile shows "Session ended" (not "Session expired") after logging out.
   Future<void> signOut() async {
     final token = await getToken();
+    await FcmPushService.clearCustomerToken();
     if (token != null && token.isNotEmpty) {
       final uri = Uri.parse('$_apiBaseUrl/logout');
       try {

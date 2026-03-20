@@ -1,10 +1,12 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:ice_cream/services/fcm_push_service.dart';
 import 'client/landing_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  await FcmPushService.initialize();
   runApp(const MyApp());
 }
 

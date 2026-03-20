@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ice_cream/auth.dart';
+import 'package:ice_cream/firebase_rtdb_config.dart';
+import 'package:ice_cream/services/last_updated_rtdb_listener.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -29,11 +31,56 @@ class _messagesPageState extends State<messagesPage> {
   bool _refreshing = false;
   String _error = '';
   List<Map<String, dynamic>> _threads = [];
+  final Map<int, LastUpdatedRtdbListener> _shipmentOrderRtdb = {};
 
   @override
   void initState() {
     super.initState();
     _fetchThreads();
+  }
+
+  @override
+  void dispose() {
+    for (final l in _shipmentOrderRtdb.values) {
+      l.dispose();
+    }
+    _shipmentOrderRtdb.clear();
+    super.dispose();
+  }
+
+  void _syncShipmentOrderRtdbListeners() {
+    final db = firebaseRtdb();
+    final ids = <int>{};
+    for (final t in _threads) {
+      final raw = t['shipment_ids'] as List?;
+      if (raw != null) {
+        for (final e in raw) {
+          final id = int.tryParse(e.toString());
+          if (id != null && id > 0) ids.add(id);
+        }
+      }
+      final sid = t['shipment_id'];
+      final mainId = sid is int ? sid : int.tryParse(sid?.toString() ?? '');
+      if (mainId != null && mainId > 0) ids.add(mainId);
+    }
+    final capped = ids.take(35).toSet();
+    for (final k in _shipmentOrderRtdb.keys.toList()) {
+      if (!capped.contains(k)) {
+        _shipmentOrderRtdb.remove(k)?.dispose();
+      }
+    }
+    for (final sid in capped) {
+      if (_shipmentOrderRtdb.containsKey(sid)) continue;
+      _shipmentOrderRtdb[sid] = LastUpdatedRtdbListener(
+        database: db,
+        path: 'order_messages/$sid/last_updated',
+        debounce: const Duration(milliseconds: 500),
+        onTick: () {
+          if (!mounted) return;
+          _fetchThreads(silent: true);
+        },
+      )..start();
+    }
   }
 
   Future<String?> _token() async {
@@ -129,20 +176,31 @@ class _messagesPageState extends State<messagesPage> {
     }
   }
 
-  Future<void> _fetchThreads() async {
+  Future<void> _fetchThreads({bool silent = false}) async {
     final isRefresh = _threads.isNotEmpty;
-    setState(() {
-      if (isRefresh) {
-        _refreshing = true;
-      } else {
-        _loading = true;
-        _error = '';
-      }
-    });
+    if (!silent) {
+      setState(() {
+        if (isRefresh) {
+          _refreshing = true;
+        } else {
+          _loading = true;
+          _error = '';
+        }
+      });
+    } else if (isRefresh) {
+      setState(() => _refreshing = true);
+    }
     try {
       final token = await _token();
       if (token == null || token.isEmpty) {
         if (!mounted) return;
+        if (silent) {
+          setState(() {
+            _loading = false;
+            _refreshing = false;
+          });
+          return;
+        }
         setState(() {
           _loading = false;
           _refreshing = false;
@@ -270,8 +328,16 @@ class _messagesPageState extends State<messagesPage> {
         _loading = false;
         _refreshing = false;
       });
+      _syncShipmentOrderRtdbListeners();
     } catch (_) {
       if (!mounted) return;
+      if (silent) {
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+        });
+        return;
+      }
       setState(() {
         _loading = false;
         _refreshing = false;
@@ -577,6 +643,7 @@ class _ChatPageState extends State<ChatPage> {
   String _error = '';
   List<_OrderMessage> _messages = [];
   int _activeShipmentId = 0;
+  final Map<int, LastUpdatedRtdbListener> _orderMsgsRtdb = {};
 
   @override
   void initState() {
@@ -584,13 +651,40 @@ class _ChatPageState extends State<ChatPage> {
     _activeShipmentId = widget.shipmentId;
     _loadMessages(showLoader: false);
     _markRead();
+    _attachOrderMessagesRtdb();
   }
 
   @override
   void dispose() {
+    for (final l in _orderMsgsRtdb.values) {
+      l.dispose();
+    }
+    _orderMsgsRtdb.clear();
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _attachOrderMessagesRtdb() {
+    final db = firebaseRtdb();
+    final ids = _shipmentIds.toSet();
+    for (final k in _orderMsgsRtdb.keys.toList()) {
+      if (!ids.contains(k)) {
+        _orderMsgsRtdb.remove(k)?.dispose();
+      }
+    }
+    for (final sid in ids) {
+      if (_orderMsgsRtdb.containsKey(sid)) continue;
+      _orderMsgsRtdb[sid] = LastUpdatedRtdbListener(
+        database: db,
+        path: 'order_messages/$sid/last_updated',
+        debounce: const Duration(milliseconds: 450),
+        onTick: () {
+          if (!mounted) return;
+          _loadMessages(showLoader: false, silent: true);
+        },
+      )..start();
+    }
   }
 
   Future<String?> _token() async {
@@ -648,8 +742,8 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _loadMessages({bool showLoader = true}) async {
-    if (showLoader) {
+  Future<void> _loadMessages({bool showLoader = true, bool silent = false}) async {
+    if (showLoader && !silent) {
       setState(() => _error = '');
     }
     try {
@@ -703,6 +797,10 @@ class _ChatPageState extends State<ChatPage> {
       }
     } catch (_) {
       if (!mounted) return;
+      if (silent) {
+        setState(() => _hasLoadedOnce = true);
+        return;
+      }
       setState(() {
         _hasLoadedOnce = true;
         _error = 'Could not load messages. Check connection.';
