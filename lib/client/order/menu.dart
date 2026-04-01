@@ -2224,6 +2224,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
   /// Idempotency key for downpayment API. Reused on retry to avoid duplicate orders.
   String? _downpaymentIdempotencyKey;
 
+  /// Red borders / inline errors only after user taps Place Order at least once.
+  bool _showCheckoutValidation = false;
+
   double get _totalPayment => widget.cartSubtotal ?? 0;
 
   @override
@@ -2284,6 +2287,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
   }
 
   String? get _downPaymentError {
+    if (selectedPayment != 'gcash') return null;
     if (selectedDownPaymentPercent == null) return "Down payment is required*";
     return null;
   }
@@ -2293,11 +2297,36 @@ class _CheckoutPageState extends State<CheckoutPage> {
     return null;
   }
 
-  bool get _canPlaceOrder =>
-      selectedDate != null &&
-      selectedTime != null &&
-      selectedDownPaymentPercent != null &&
-      selectedPayment.isNotEmpty;
+  bool get _canPlaceOrder {
+    if (selectedDate == null || selectedTime == null) return false;
+    if (selectedPayment.isEmpty) return false;
+    if (selectedPayment == 'gcash' && selectedDownPaymentPercent == null) {
+      return false;
+    }
+    return true;
+  }
+
+  String? get _deliveryValidationVisible =>
+      _showCheckoutValidation ? _deliveryScheduleError : null;
+
+  String? get _downPaymentValidationVisible =>
+      _showCheckoutValidation ? _downPaymentError : null;
+
+  String? get _paymentValidationVisible =>
+      _showCheckoutValidation ? _paymentMethodError : null;
+
+  String _placeOrderBlockedMessage() {
+    if (_deliveryScheduleError != null) {
+      return 'Please set delivery date and time.';
+    }
+    if (_paymentMethodError != null) {
+      return 'Please choose a payment method.';
+    }
+    if (_downPaymentError != null) {
+      return 'Please select a down payment amount.';
+    }
+    return 'Please complete all required fields.';
+  }
 
   Future<void> _startDownpaymentFlow() async {
     final items = widget.cartItems;
@@ -2598,13 +2627,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
         ),
         child: GestureDetector(
           onTap: () {
+            setState(() => _showCheckoutValidation = true);
             if (!_canPlaceOrder) {
-              setState(() {});
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Please complete delivery schedule, select down payment, and choose a payment method.',
-                  ),
+                SnackBar(
+                  content: Text(_placeOrderBlockedMessage()),
                   behavior: SnackBarBehavior.floating,
                 ),
               );
@@ -2616,30 +2643,26 @@ class _CheckoutPageState extends State<CheckoutPage> {
               _startDownpaymentFlow();
             }
           },
-          child: AnimatedOpacity(
-            opacity: _canPlaceOrder && !_placingOrder ? 1 : 0.5,
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              height: 55,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE3001B),
-                borderRadius: BorderRadius.circular(35),
-              ),
-              child: Center(
-                child: _placingOrder
-                    ? const SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      )
-                    : const Text(
-                        "Place Order",
-                        style: TextStyle(color: Colors.white, fontSize: 16),
+          child: Container(
+            height: 55,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE3001B),
+              borderRadius: BorderRadius.circular(35),
+            ),
+            child: Center(
+              child: _placingOrder
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
-              ),
+                    )
+                  : const Text(
+                      "Place Order",
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
             ),
           ),
         ),
@@ -2844,7 +2867,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
 
             _buildSection(
               title: "Delivery schedule",
-              validationError: _deliveryScheduleError,
+              validationError: _deliveryValidationVisible,
               child: Row(
                 children: [
                   Expanded(child: _datePicker()),
@@ -2855,50 +2878,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
             ),
 
             _buildSection(
-              title: "Down payment Amount",
-              validationError: _downPaymentError,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 0),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      double dotWidth = 4.1;
-                      double spacing = 4;
-                      int count = (constraints.maxWidth / (dotWidth + spacing)).floor();
-
-                      return Row(
-                        children: List.generate(
-                          count,
-                          (_) => Container(
-                            width: dotWidth,
-                            height: 1,
-                            margin: EdgeInsets.only(right: spacing),
-                            color: const Color(0xFFB2B2B2),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(child: _percentBox(0.25)),
-                      const SizedBox(width: 8),
-                      Expanded(child: _percentBox(0.5)),
-                      const SizedBox(width: 8),
-                      Expanded(child: _percentBox(0.75)),
-                      const SizedBox(width: 8),
-                      Expanded(child: _percentBox(1.0)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            _buildSection(
               title: "Payment Method",
-              validationError: _paymentMethodError,
+              validationError: _paymentValidationVisible,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2993,7 +2974,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: GestureDetector(
-                          onTap: () => setState(() => selectedPayment = "cod"),
+                          onTap: () => setState(() {
+                            selectedPayment = "cod";
+                            selectedDownPaymentPercent = null;
+                          }),
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                             decoration: BoxDecoration(
@@ -3065,6 +3049,49 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 ],
               ),
             ),
+            if (selectedPayment == "gcash")
+              _buildSection(
+                title: "Down payment Amount",
+                validationError: _downPaymentValidationVisible,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 0),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        double dotWidth = 4.1;
+                        double spacing = 4;
+                        int count = (constraints.maxWidth / (dotWidth + spacing)).floor();
+
+                        return Row(
+                          children: List.generate(
+                            count,
+                            (_) => Container(
+                              width: dotWidth,
+                              height: 1,
+                              margin: EdgeInsets.only(right: spacing),
+                              color: const Color(0xFFB2B2B2),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(child: _percentBox(0.25)),
+                        const SizedBox(width: 8),
+                        Expanded(child: _percentBox(0.5)),
+                        const SizedBox(width: 8),
+                        Expanded(child: _percentBox(0.75)),
+                        const SizedBox(width: 8),
+                        Expanded(child: _percentBox(1.0)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             _buildSection(
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
               child: Column(

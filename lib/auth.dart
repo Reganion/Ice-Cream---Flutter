@@ -5,7 +5,7 @@ import 'package:ice_cream/services/fcm_push_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Laravel API base URL (includes /api/v1).
-const String _apiBaseUrl = 'http://10.123.114.86:8000/api/v1';
+const String _apiBaseUrl = 'https://hricecream.site/api/v1';
 
 const String _tokenKey = 'auth_token';
 const String _customerCacheKey = 'auth_customer_cache';
@@ -53,7 +53,7 @@ class Auth {
     await prefs.remove(_customerCacheKey);
   }
 
-  /// Save token/customer to local storage (used by non-standard login flows like Google login).
+  /// Save token/customer to local storage (e.g. custom auth flows).
   static Future<void> saveSession({
     required String token,
     Map<String, dynamic>? customer,

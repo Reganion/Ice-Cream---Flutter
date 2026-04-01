@@ -5,11 +5,6 @@ import 'package:ice_cream/client/forgot_password.dart';
 import 'create_page.dart'; // or the correct file path
 import 'home_page.dart'; // or the correct file path
 import 'landing_page.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:ice_cream/services/fcm_push_service.dart';
-
 
 enum SuffixIconType { clear, visibility }
 
@@ -40,7 +35,7 @@ class _LoginPageState extends State<LoginPage> {
   Color _emailBorderColor = const Color(0xFFFAFAFA);
   Color _passwordBorderColor = const Color(0xFFFAFAFA);
 
-  bool _isGoogleLoading = false;
+  bool _isLoginLoading = false;
 
   @override
   void initState() {
@@ -67,77 +62,6 @@ class _LoginPageState extends State<LoginPage> {
     _focusNodePassword.dispose();
     super.dispose();
   }
-
-final GoogleSignIn _googleSignIn = GoogleSignIn(
-  scopes: ['email'],
-  serverClientId: '718217481412-14icq5ololcndgbmecjaqiat1l4425n9.apps.googleusercontent.com',
-);
-
-Future<void> _signInWithGoogle() async {
-  setState(() => _isGoogleLoading = true);
-
-  try {
-    final GoogleSignInAccount? googleUser =
-        await _googleSignIn.signIn();
-
-    if (googleUser == null) {
-      setState(() => _isGoogleLoading = false);
-      return;
-    }
-
-    final GoogleSignInAuthentication googleAuth =
-        await googleUser.authentication;
-
-    final String? idToken = googleAuth.idToken;
-
-    if (idToken == null) {
-      throw Exception("Failed to get ID Token");
-    }
-
-    // Send token to Laravel backend
-    final response = await http.post(
-     Uri.parse("${Auth.apiBaseUrl}/google-login"),
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: jsonEncode({
-        "id_token": idToken,
-      }),
-    );
-
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode == 200 && data['success'] == true) {
-      final token = (data['token'] ?? '').toString();
-      final customer = data['customer'] is Map<String, dynamic>
-          ? Map<String, dynamic>.from(data['customer'] as Map)
-          : <String, dynamic>{};
-      if (token.isNotEmpty) {
-        await Auth.saveSession(
-          token: token,
-          customer: customer,
-        );
-        await FcmPushService.syncCustomerToken();
-      }
-      if (!mounted) return;
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomePage()),
-      );
-    } else {
-      throw Exception(data['message'] ?? "Google login failed");
-    }
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString())),
-    );
-  } finally {
-    setState(() => _isGoogleLoading = false);
-  }
-}
-
 
   @override
   Widget build(BuildContext context) {
@@ -295,128 +219,99 @@ Future<void> _signInWithGoogle() async {
                         width: double.infinity,
                         height: 55,
                         child: ElevatedButton(
-                          onPressed: () async {
-                            setState(() {
-                              _emailError = _emailController.text.isEmpty;
-                              _passwordError = _passwordController.text.isEmpty;
-                              _passwordErrorMessage = _passwordError
-                                  ? "This field is required."
-                                  : null;
-                            });
+                          onPressed: _isLoginLoading
+                              ? null
+                              : () async {
+                                  setState(() {
+                                    _emailError = _emailController.text.isEmpty;
+                                    _passwordError =
+                                        _passwordController.text.isEmpty;
+                                    _passwordErrorMessage = _passwordError
+                                        ? "This field is required."
+                                        : null;
+                                  });
 
-                            if (!_emailError && !_passwordError) {
-                              try {
-                                final result = await Auth().login(
-                                  email: _emailController.text.trim(),
-                                  password: _passwordController.text.trim(),
-                                );
+                                  if (_emailError || _passwordError) return;
 
-                                if (result['success'] == true) {
-                                  if (!context.mounted) return;
-                                  Navigator.pushReplacement(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const HomePage(),
-                                    ),
-                                  );
-                                  return;
-                                }
+                                  setState(() => _isLoginLoading = true);
+                                  try {
+                                    final result = await Auth().login(
+                                      email: _emailController.text.trim(),
+                                      password:
+                                          _passwordController.text.trim(),
+                                    );
 
-                                if (result['needsOtp'] == true) {
-                                  final email = result['email'] as String? ??
-                                      _emailController.text.trim();
-                                  if (!context.mounted) return;
-                                  Navigator.pushReplacement(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => OTPcode(
-                                        email: email,
-                                        password: _passwordController.text.trim(),
-                                      ),
-                                    ),
-                                  );
-                                  return;
-                                }
-                              } catch (e) {
-                                if (!context.mounted) return;
-                                final msg = e is Exception
-                                    ? e.toString().replaceFirst('Exception: ', '')
-                                    : 'Invalid email or password';
-                                setState(() {
-                                  _passwordError = true;
-                                  _passwordErrorMessage = msg;
-                                });
-                              }
-                            }
-                          },
+                                    if (result['success'] == true) {
+                                      if (!context.mounted) return;
+                                      Navigator.pushReplacement(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const HomePage(),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    if (result['needsOtp'] == true) {
+                                      final email = result['email'] as String? ??
+                                          _emailController.text.trim();
+                                      if (!context.mounted) return;
+                                      Navigator.pushReplacement(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => OTPcode(
+                                            email: email,
+                                            password: _passwordController.text
+                                                .trim(),
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                  } catch (e) {
+                                    if (!context.mounted) return;
+                                    final msg = e is Exception
+                                        ? e.toString().replaceFirst(
+                                            'Exception: ', '')
+                                        : 'Invalid email or password';
+                                    setState(() {
+                                      _passwordError = true;
+                                      _passwordErrorMessage = msg;
+                                    });
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _isLoginLoading = false);
+                                    }
+                                  }
+                                },
 
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFE3001C),
+                            disabledBackgroundColor: const Color(0xFFE3001C),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: const Text(
-                            'Login',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 30),
-                      // Or Sign In with
-                      Row(
-                        children: const [
-                          Expanded(child: Divider()),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 8.0),
-                            child: Text('Or, Sign In with'),
-                          ),
-                          Expanded(child: Divider()),
-                        ],
-                      ),
-                      const SizedBox(height: 30),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 55,
-                        child: OutlinedButton(
-                          onPressed: _isGoogleLoading ? null : _signInWithGoogle,
-                          style: OutlinedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: _isGoogleLoading
+                          child: _isLoginLoading
                               ? const SizedBox(
                                   height: 24,
                                   width: 24,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
                                 )
-                              : Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Image.asset(
-                                      'lib/client/images/CL_page/ggl.png',
-                                      height: 50,
-                                      width: 50,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    const Text(
-                                      'Sign In with Google',
-                                      style: TextStyle(
-                                        fontSize: 14.27,
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w400,
-                                      ),
-                                    ),
-                                  ],
+                              : const Text(
+                                  'Login',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                         ),
                       ),
+
                       const Spacer(),
                       const SizedBox(height: 7),
                       Row(

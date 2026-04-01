@@ -62,15 +62,45 @@ class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> get _flavorsForDisplay {
     return (_flavors ?? <Map<String, dynamic>>[])
         .where((item) =>
-            (item["name"] as String? ?? "")
+            _asString(item["name"])
                 .toLowerCase()
                 .contains(searchText.toLowerCase()))
         .map((e) => {
-              "title": e["name"] as String? ?? "",
-              "imageUrl": _imageUrl((e["mobile_image"] ?? e["image"]) as String?),
+              "title": _asString(e["name"]),
+              "imageUrl": _imageUrl(_asStringOrNull(e["mobile_image"]) ?? _asStringOrNull(e["image"])),
               "priceDisplay": _formatPrice(e["price"]),
+              "isOutOfStock": !_isAvailableFlavor(e),
             })
         .toList();
+  }
+
+  static String _asString(dynamic value) {
+    if (value == null) return "";
+    return value.toString().trim();
+  }
+
+  static String? _asStringOrNull(dynamic value) {
+    final s = _asString(value);
+    return s.isEmpty ? null : s;
+  }
+
+  static bool _isAvailableFlavor(Map<String, dynamic> flavor) {
+    final rawFlag = flavor["is_available"];
+    if (rawFlag is bool) return rawFlag;
+    if (rawFlag != null) {
+      final normalized = rawFlag.toString().trim().toLowerCase();
+      if (normalized == "true" || normalized == "1" || normalized == "yes") return true;
+      if (normalized == "false" || normalized == "0" || normalized == "no") return false;
+    }
+
+    final stockStatus = _asString(flavor["stock_status"]).toLowerCase();
+    if (stockStatus.isNotEmpty) return stockStatus == "available";
+
+    final status = _asString(flavor["status"]).toLowerCase();
+    if (status.isNotEmpty) return status == "available";
+
+    // Keep backward compatibility for old payloads with no stock fields.
+    return true;
   }
 
   /// Base URL without /api/v1 for image paths.
@@ -523,7 +553,9 @@ class _HomePageState extends State<HomePage> {
                           return GestureDetector(
                             onTap: () {
                               if (count == 0) return;
-                              final flavorName = _bestSellers![currentPage.clamp(0, count - 1)]["name"] as String? ?? "";
+                              final flavorName = _asString(
+                                _bestSellers![currentPage.clamp(0, count - 1)]["name"],
+                              );
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -561,7 +593,10 @@ class _HomePageState extends State<HomePage> {
                                             itemCount: count,
                                             itemBuilder: (context, i) {
                                               if (!useBestSellers) return const SizedBox.shrink();
-                                              final imgUrl = _imageUrl((_bestSellers![i]["mobile_image"] ?? _bestSellers![i]["image"]) as String?);
+                                              final imgUrl = _imageUrl(
+                                                _asStringOrNull(_bestSellers![i]["mobile_image"]) ??
+                                                    _asStringOrNull(_bestSellers![i]["image"]),
+                                              );
                                               return Padding(
                                                 padding: const EdgeInsets.symmetric(horizontal: 5),
                                                 child: ClipRRect(
@@ -591,8 +626,11 @@ class _HomePageState extends State<HomePage> {
                                     builder: (context, _) {
                                       final page = _topImagesCurrentPage;
                                       final name = useBestSellers && count > 0
-                                          ? (_bestSellers![page.clamp(0, count - 1)]["name"] as String? ?? "")
+                                          ? _asString(_bestSellers![page.clamp(0, count - 1)]["name"])
                                           : "";
+                                      final isOutOfStock = useBestSellers && count > 0
+                                          ? !_isAvailableFlavor(_bestSellers![page.clamp(0, count - 1)])
+                                          : false;
                                       const rating = "5.0";
                                       return Row(
                                         mainAxisAlignment:
@@ -601,7 +639,7 @@ class _HomePageState extends State<HomePage> {
                                             CrossAxisAlignment.center,
                                         children: [
                                           Text(
-                                            name,
+                                            isOutOfStock ? "$name (Out of stock)" : name,
                                             style: TextStyle(
                                               color: Colors.white,
                                               fontSize: isMobile(context)
@@ -694,7 +732,9 @@ class _HomePageState extends State<HomePage> {
                                 final page = _manualSlideCurrentPage;
                                 final count = _popularCarouselItemCount;
                                 if (count == 0) return;
-                                final name = _popular![page.clamp(0, count - 1)]["name"] as String? ?? "";
+                                final name = _asString(
+                                  _popular![page.clamp(0, count - 1)]["name"],
+                                );
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
@@ -727,7 +767,10 @@ class _HomePageState extends State<HomePage> {
                                       itemCount: _popularCarouselItemCount,
                                       itemBuilder: (context, i) {
                                         if (_popular == null || _popular!.isEmpty) return const SizedBox.shrink();
-                                        final imgUrl = _imageUrl((_popular![i]["mobile_image"] ?? _popular![i]["image"]) as String?);
+                                        final imgUrl = _imageUrl(
+                                          _asStringOrNull(_popular![i]["mobile_image"]) ??
+                                              _asStringOrNull(_popular![i]["image"]),
+                                        );
                                         return Padding(
                                           padding: const EdgeInsets.symmetric(horizontal: 5),
                                           child: ClipRRect(
@@ -762,8 +805,11 @@ class _HomePageState extends State<HomePage> {
                                 final usePopular = _popular?.isNotEmpty == true;
                                 final count = _popularCarouselItemCount;
                                 final name = usePopular && count > 0
-                                    ? (_popular![page.clamp(0, count - 1)]["name"] as String? ?? "")
+                                    ? _asString(_popular![page.clamp(0, count - 1)]["name"])
                                     : "";
+                                final isOutOfStock = usePopular && count > 0
+                                    ? !_isAvailableFlavor(_popular![page.clamp(0, count - 1)])
+                                    : false;
                                 final price = usePopular && count > 0
                                     ? _formatPrice(_popular![page.clamp(0, count - 1)]["price"])
                                     : "₱0";
@@ -771,7 +817,7 @@ class _HomePageState extends State<HomePage> {
                                   onTap: () {
                                     final p = _manualSlideCurrentPage;
                                     final slideName = usePopular && count > 0
-                                        ? (_popular![p.clamp(0, count - 1)]["name"] as String? ?? "")
+                                        ? _asString(_popular![p.clamp(0, count - 1)]["name"])
                                         : "";
                                     Navigator.push(
                                       context,
@@ -840,6 +886,15 @@ class _HomePageState extends State<HomePage> {
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),
+                                      if (isOutOfStock)
+                                        const Text(
+                                          "Out of stock",
+                                          style: TextStyle(
+                                            color: Color(0xFFE3001B),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 );
@@ -921,6 +976,7 @@ class _HomePageState extends State<HomePage> {
                                         final title = item["title"] as String;
                                         final imageUrl = item["imageUrl"] as String?;
                                         final priceStr = item["priceDisplay"] as String?;
+                                        final isOutOfStock = item["isOutOfStock"] as bool? ?? false;
                                         return Padding(
                                           padding: const EdgeInsets.only(
                                             right: 8,
@@ -930,6 +986,7 @@ class _HomePageState extends State<HomePage> {
                                             "",
                                             imageUrl: imageUrl,
                                             priceDisplay: priceStr,
+                                            isOutOfStock: isOutOfStock,
                                             width: 149,
                                             onTap: () {
                                               Navigator.push(
@@ -966,11 +1023,13 @@ class _HomePageState extends State<HomePage> {
                               final title = item["title"] as String;
                               final imageUrl = item["imageUrl"] as String?;
                               final priceStr = item["priceDisplay"] as String?;
+                              final isOutOfStock = item["isOutOfStock"] as bool? ?? false;
                               return _flavorCard(
                                 title,
                                 "",
                                 imageUrl: imageUrl,
                                 priceDisplay: priceStr,
+                                isOutOfStock: isOutOfStock,
                                 onTap: () {
                                   Navigator.push(
                                     context,
@@ -1003,7 +1062,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _flavorCard(String title, String img,
-      {String? imageUrl, String? priceDisplay, double width = 142, VoidCallback? onTap}) {
+      {String? imageUrl,
+      String? priceDisplay,
+      bool isOutOfStock = false,
+      double width = 142,
+      VoidCallback? onTap}) {
     final useNetworkImage = imageUrl != null && imageUrl.isNotEmpty;
     final card = Container(
       width: width,
@@ -1059,6 +1122,18 @@ class _HomePageState extends State<HomePage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (isOutOfStock)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2, bottom: 2),
+                    child: Text(
+                      "Out of stock",
+                      style: TextStyle(
+                        color: Color(0xFFE3001B),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.center,

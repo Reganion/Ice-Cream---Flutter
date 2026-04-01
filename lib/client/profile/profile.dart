@@ -21,6 +21,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _account;
   bool _loading = true;
   String? _error;
+  bool _isLoggingOut = false;
 
   @override
   void initState() {
@@ -290,26 +291,47 @@ class _ProfilePageState extends State<ProfilePage> {
                       child: OutlinedButton(
                         style: OutlinedButton.styleFrom(
                           side: const BorderSide(color: Color(0xFFE3001B), width: 1),
+                          disabledForegroundColor: const Color(0xFFE3001B),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        onPressed: () async {
-                          await Auth().signOut();
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (_) => LoginPage()),
-                            (route) => false,
-                          );
-                        },
-                        child: const Text(
-                          "Log out",
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Color(0xFFE3001B),
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
+                        onPressed: _isLoggingOut
+                            ? null
+                            : () async {
+                                setState(() => _isLoggingOut = true);
+                                try {
+                                  await Auth().signOut();
+                                  if (!mounted) return;
+                                  Navigator.pushAndRemoveUntil(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) => const LoginPage()),
+                                    (route) => false,
+                                  );
+                                } catch (_) {
+                                  if (mounted) {
+                                    setState(() => _isLoggingOut = false);
+                                  }
+                                }
+                              },
+                        child: _isLoggingOut
+                            ? const SizedBox(
+                                height: 22,
+                                width: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Color(0xFFE3001B),
+                                ),
+                              )
+                            : const Text(
+                                "Log out",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Color(0xFFE3001B),
+                                  fontWeight: FontWeight.w400,
+                                ),
+                              ),
                       ),
                     ),
                   ),
@@ -471,26 +493,49 @@ class _ProfilePageState extends State<ProfilePage> {
                             child: OutlinedButton(
                               style: OutlinedButton.styleFrom(
                                 side: const BorderSide(color: Color(0xFFE3001B), width: 1),
+                                disabledForegroundColor: const Color(0xFFE3001B),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                               ),
-                              onPressed: () async {
-                                await Auth().signOut();
-                                Navigator.pushAndRemoveUntil(
-                                  context,
-                                  MaterialPageRoute(builder: (_) => LandingPage()),
-                                  (route) => false,
-                                );
-                              },
-                              child: const Text(
-                                "Log out",
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Color(0xFFE3001B),
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
+                              onPressed: _isLoggingOut
+                                  ? null
+                                  : () async {
+                                      setState(() => _isLoggingOut = true);
+                                      try {
+                                        await Auth().signOut();
+                                        if (!mounted) return;
+                                        Navigator.pushAndRemoveUntil(
+                                          context,
+                                          MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const LandingPage()),
+                                          (route) => false,
+                                        );
+                                      } catch (_) {
+                                        if (mounted) {
+                                          setState(
+                                              () => _isLoggingOut = false);
+                                        }
+                                      }
+                                    },
+                              child: _isLoggingOut
+                                  ? const SizedBox(
+                                      height: 22,
+                                      width: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFE3001B),
+                                      ),
+                                    )
+                                  : const Text(
+                                      "Log out",
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Color(0xFFE3001B),
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                    ),
                             ),
                           ),
                         ),
@@ -1685,18 +1730,16 @@ class _ChangePPasswordPageState extends State<ChangePPasswordPage> {
                                   _sending = false;
                                 });
                               }
-                            } finally {
-                              if (mounted) setState(() => _sending = false);
                             }
                           }
                         : null,
                     style: ButtonStyle(
                       backgroundColor: MaterialStateProperty.resolveWith<Color>(
                         (Set<MaterialState> states) {
-                          if (states.contains(MaterialState.disabled)) {
-                            return const Color(0xFFFF9CA8); // disabled color
+                          if (!hasText) {
+                            return const Color(0xFFFF9CA8);
                           }
-                          return const Color(0xFFE3001B); // enabled color
+                          return const Color(0xFFE3001B);
                         },
                       ),
                       shape: MaterialStateProperty.all<RoundedRectangleBorder>(
@@ -1706,14 +1749,23 @@ class _ChangePPasswordPageState extends State<ChangePPasswordPage> {
                       ),
                       elevation: MaterialStateProperty.all(0),
                     ),
-                    child: Text(
-                      _sending ? "Sending..." : "Continue",
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.white,
-                      ),
-                    ),
+                    child: _sending
+                        ? const SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text(
+                            "Continue",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.white,
+                            ),
+                          ),
                   ),
                 ),
               ],
@@ -1856,8 +1908,6 @@ class _OTPscodeState extends State<OTPscode> {
                                 _verifying = false;
                               });
                             }
-                          } finally {
-                            if (mounted) setState(() => _verifying = false);
                           }
                         }
                       : null,
@@ -1865,10 +1915,10 @@ class _OTPscodeState extends State<OTPscode> {
                     backgroundColor: MaterialStateProperty.resolveWith<Color>((
                       states,
                     ) {
-                      if (isFilled && !_verifying) {
-                        return const Color(0xFFE3001B);
+                      if (!isFilled) {
+                        return const Color(0xFFFF9CA7);
                       }
-                      return const Color(0xFFFF9CA7);
+                      return const Color(0xFFE3001B);
                     }),
                     shape: MaterialStateProperty.all(
                       RoundedRectangleBorder(
@@ -1877,14 +1927,23 @@ class _OTPscodeState extends State<OTPscode> {
                     ),
                     elevation: MaterialStateProperty.all(0),
                   ),
-                  child: Text(
-                    _verifying ? "Verifying..." : "Continue",
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                    ),
-                  ),
+                  child: _verifying
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "Continue",
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.white,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 35),
@@ -2317,21 +2376,31 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                             }
                           : null,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _isContinueEnabled && !_saving
+                        backgroundColor: const Color(0xFFE3001B),
+                        disabledBackgroundColor: _saving
                             ? const Color(0xFFE3001B)
                             : const Color(0xFFFF9CA7),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),
                       ),
-                      child: Text(
-                        _saving ? "Updating..." : "Change password",
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w400,
-                          color: Color(0xFFFFFFFF),
-                        ),
-                      ),
+                      child: _saving
+                          ? const SizedBox(
+                              height: 24,
+                              width: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              "Change password",
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w400,
+                                color: Color(0xFFFFFFFF),
+                              ),
+                            ),
                     ),
                   ),
                 ),
@@ -2355,34 +2424,87 @@ BoxDecoration _shadowBox() {
   );
 }
 
-class ChangeSuccessPage extends StatelessWidget {
+class ChangeSuccessPage extends StatefulWidget {
   const ChangeSuccessPage({super.key, required this.loggedOut});
   /// True if user chose to be logged out after password change; false if "keep logged in".
   final bool loggedOut;
 
   @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isLandscape =
-        MediaQuery.of(context).orientation == Orientation.landscape;
+  State<ChangeSuccessPage> createState() => _ChangeSuccessPageState();
+}
 
-    void goNext() async {
-      if (loggedOut) {
+class _ChangeSuccessPageState extends State<ChangeSuccessPage> {
+  bool _busy = false;
+
+  Future<void> _goNext() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (widget.loggedOut) {
         await Auth().signOut();
-        if (!context.mounted) return;
+        if (!mounted) return;
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const LoginPage()),
           (route) => false,
         );
       } else {
+        if (!mounted) return;
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const ProfilePage()),
           (route) => false,
         );
       }
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Widget _continueButton({
+    required double width,
+    required double height,
+    required double fontSize,
+  }) {
+    return SizedBox(
+      width: width,
+      height: height,
+      child: ElevatedButton(
+        onPressed: _busy ? null : _goNext,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF804EFF),
+          disabledBackgroundColor: const Color(0xFF804EFF),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(50),
+          ),
+          elevation: 0,
+        ),
+        child: _busy
+            ? const SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Text(
+                'Continue',
+                style: TextStyle(
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.white,
+                ),
+              ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
 
     return Scaffold(
       backgroundColor: const Color(0xFFC5C8FF),
@@ -2421,28 +2543,7 @@ class ChangeSuccessPage extends StatelessWidget {
                             ),
                           ),
                           const Spacer(),
-                          SizedBox(
-                            width: 220,
-                            height: 50,
-                            child: ElevatedButton(
-                              onPressed: goNext,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF804EFF),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(50),
-                                ),
-                                elevation: 0,
-                              ),
-                              child: const Text(
-                                'Continue',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w400,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
+                          _continueButton(width: 220, height: 50, fontSize: 15),
                           const SizedBox(height: 10),
                         ],
                       ),
@@ -2477,28 +2578,7 @@ class ChangeSuccessPage extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    SizedBox(
-                      width: 320,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: goNext,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF804EFF),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(50),
-                          ),
-                          elevation: 0,
-                        ),
-                        child: const Text(
-                          'Continue',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w400,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
+                    _continueButton(width: 320, height: 56, fontSize: 16),
                     const SizedBox(height: 10),
                   ],
                 ),
@@ -3055,30 +3135,31 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                                     });
                                   }
                                 },
-                          style: ButtonStyle(
-                            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                              (Set<MaterialState> states) {
-                                if (states.contains(MaterialState.disabled)) {
-                                  return const Color(0xFFFF9CA7);
-                                }
-                                return const Color(0xFFE3001B);
-                              },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE3001B),
+                            disabledBackgroundColor: const Color(0xFFE3001B),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(50),
                             ),
-                            shape: MaterialStateProperty.all<RoundedRectangleBorder>(
-                              RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(50),
-                              ),
-                            ),
-                            elevation: MaterialStateProperty.all<double>(0),
+                            elevation: 0,
                           ),
-                          child: Text(
-                            _deleting ? 'Deleting...' : 'Delete',
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w400,
-                              color: Colors.white,
-                            ),
-                          ),
+                          child: _deleting
+                              ? const SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text(
+                                  'Delete',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white,
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 13),
@@ -3086,9 +3167,11 @@ class _DeleteConfirmPageState extends State<DeleteConfirmPage> {
                         width: double.infinity,
                         height: 56,
                         child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                          },
+                          onPressed: _deleting
+                              ? null
+                              : () {
+                                  Navigator.pop(context);
+                                },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFFAFAFA),
                             shape: RoundedRectangleBorder(

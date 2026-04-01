@@ -8,7 +8,6 @@ import 'package:ice_cream/auth.dart';
 import 'package:ice_cream/client/home_page.dart';
 import 'package:ice_cream/client/order/payment_success.dart';
 import 'package:intl/intl.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 /// QRPH downpayment screen.
 /// - Shown after Place Order when payment method is Gcash/QRPH.
@@ -229,31 +228,6 @@ class _QrphPageState extends State<QrphPage> {
     );
   }
 
-  /// Back arrow: mark invoice as failed via API, then return to Place Order screen.
-  Future<void> _cancelAndGoBack() async {
-    _stopPolling();
-    final token = await Auth.getToken();
-    if (token == null || token.isEmpty) {
-      if (mounted) Navigator.pop(context);
-      return;
-    }
-    final base = Auth.apiBaseUrl;
-    try {
-      await http.post(
-        Uri.parse('$base/orders/downpayment/cancel/${widget.invoiceId}'),
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
-    } catch (_) {
-      // still go back even if request fails
-    }
-    if (!mounted) return;
-    Navigator.pop(context);
-  }
-
   @override
   Widget build(BuildContext context) {
     // Log QR URL to debug loading issues
@@ -266,14 +240,7 @@ class _QrphPageState extends State<QrphPage> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leadingWidth: 48,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 8),
-          child: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.black, size: 24),
-            onPressed: _cancelAndGoBack,
-          ),
-        ),
+        automaticallyImplyLeading: false,
         title: const Text(
           "Scan to Pay",
           style: TextStyle(
@@ -283,29 +250,46 @@ class _QrphPageState extends State<QrphPage> {
           ),
         ),
         centerTitle: true,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: IconButton(
-              icon: _cancelling
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                      ),
-                    )
-                  : const Icon(Icons.close, color: Colors.black, size: 24),
-              onPressed: _cancelling ? null : _cancelDownpaymentAndExit,
-            ),
-          ),
-        ],
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(4),
           child: ColoredBox(
             color: Color(0xFFE3001B),
             child: SizedBox(height: 4),
+          ),
+        ),
+      ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.only(left: 20, right: 20, bottom: 12, top: 4),
+        child: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFE3001B)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            onPressed: _cancelling ? null : _cancelDownpaymentAndExit,
+            child: _cancelling
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFFE3001B),
+                      ),
+                    ),
+                  )
+                : const Text(
+                    "Cancel Payment",
+                    style: TextStyle(
+                      color: Color(0xFFE3001B),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
         ),
       ),
@@ -394,6 +378,7 @@ class _QrphPageState extends State<QrphPage> {
                           ),
                   ),
                 ),
+                const SizedBox(height: 14),
                 const SizedBox(height: 24),
                 Text(
                   "Open your mobile wallet and scan this QRPH code to pay the downpayment.",

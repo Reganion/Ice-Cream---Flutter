@@ -151,7 +151,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                     style: ButtonStyle(
                       backgroundColor: MaterialStateProperty.resolveWith<Color>(
                         (Set<MaterialState> states) {
-                          if (states.contains(MaterialState.disabled)) {
+                          if (!hasText) {
                             return const Color(0xFFFF9CA8);
                           }
                           return const Color(0xFFE3001B);
@@ -164,14 +164,23 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ),
                       elevation: MaterialStateProperty.all(0),
                     ),
-                    child: Text(
-                      _isLoading ? "Sending..." : "Continue",
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.white,
-                      ),
-                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text(
+                            "Continue",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.white,
+                            ),
+                          ),
                   ),
                 ),
               ],
@@ -324,10 +333,10 @@ class _ForgotPasswordOtpPageState extends State<ForgotPasswordOtpPage> {
                     backgroundColor: MaterialStateProperty.resolveWith<Color>((
                       states,
                     ) {
-                      if (isFilled && !_isVerifying) {
-                        return const Color(0xFFE3001B);
+                      if (!isFilled) {
+                        return const Color(0xFFFF9CA7);
                       }
-                      return const Color(0xFFFF9CA7);
+                      return const Color(0xFFE3001B);
                     }),
                     shape: MaterialStateProperty.all(
                       RoundedRectangleBorder(
@@ -336,14 +345,23 @@ class _ForgotPasswordOtpPageState extends State<ForgotPasswordOtpPage> {
                     ),
                     elevation: MaterialStateProperty.all(0),
                   ),
-                  child: Text(
-                    _isVerifying ? "Verifying..." : "Continue",
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                    ),
-                  ),
+                  child: _isVerifying
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "Continue",
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.white,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 35),
@@ -710,7 +728,8 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                           }
                         : null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: (_isContinueEnabled && !_isLoading)
+                      backgroundColor: const Color(0xFFE3001B),
+                      disabledBackgroundColor: _isLoading
                           ? const Color(0xFFE3001B)
                           : const Color(0xFFFF9CA7),
                       shape: RoundedRectangleBorder(
@@ -718,14 +737,23 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                       ),
                       elevation: 0,
                     ),
-                    child: Text(
-                      _isLoading ? "Updating..." : "Continue",
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.white,
-                      ),
-                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text(
+                            "Continue",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.white,
+                            ),
+                          ),
                   ),
                 ),
 

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:ice_cream/client/order/map_picker_page.dart';
 import 'package:ice_cream/client/order/menu.dart';
+import 'package:latlong2/latlong.dart';
 
 class ManageAddressPage extends StatefulWidget {
   const ManageAddressPage({super.key, this.fromProfile = false});
@@ -32,6 +34,7 @@ class _ManageAddressPageState extends State<ManageAddressPage> {
   String selectedProvince = "Cebu";
   String selectedCity = "Mandaue";
   String selectedBarangay = "Maguikay";
+  LatLng? _pickedLocation;
 
   final Map<String, List<String>> barangaysByCity = {
     "Mandaue": [
@@ -264,47 +267,11 @@ class _ManageAddressPageState extends State<ManageAddressPage> {
 
               const SizedBox(height: 8),
 
-              GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const MapPickerPage()),
-                  );
+              _locationPreviewCard(
+                initialLocation: _pickedLocation,
+                onLocationPicked: (point) {
+                  setState(() => _pickedLocation = point);
                 },
-                child: Container(
-                  height: 114,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF2F2F2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 5,
-                        horizontal: 18,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE5E5E5),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: const [
-                          Icon(Icons.add, color: Color(0xff949494)),
-                          SizedBox(width: 6),
-                          Text(
-                            "Add Location",
-                            style: TextStyle(
-                              color: Color(0xff949494),
-                              fontSize: 12.55,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
               ),
 
               const SizedBox(height: 6),
@@ -429,24 +396,27 @@ class _ManageAddressPageState extends State<ManageAddressPage> {
     );
   }
 
-Widget _disabledField(String value) {
-  return Container(
-    height: 46,
-    padding: const EdgeInsets.symmetric(horizontal: 15),
-    decoration: BoxDecoration(
-      color: Colors.grey.shade200,
-      borderRadius: BorderRadius.circular(12), // optional
-      border: Border.all(color: Colors.transparent, width: 0), // removes border
-    ),
-    child: Align(
-      alignment: Alignment.centerLeft,
-      child: Text(
-        value,
-        style: const TextStyle(fontSize: 15, color: Colors.grey),
+  Widget _disabledField(String value) {
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(12), // optional
+        border: Border.all(
+          color: Colors.transparent,
+          width: 0,
+        ), // removes border
       ),
-    ),
-  );
-}
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          value,
+          style: const TextStyle(fontSize: 15, color: Colors.grey),
+        ),
+      ),
+    );
+  }
 
   // ------------------ UPDATED DROPDOWN ------------------
   Widget _dropdown(
@@ -530,24 +500,61 @@ class _AddressFormPageState extends State<AddressFormPage> {
   static const String _provinceCebu = "Cebu";
   String selectedCity = ""; // "" = "Select City"
   String selectedBarangay = ""; // "" = "Select Barangay"
+  LatLng? _pickedLocation;
 
   static const List<String> _cities = ["Mandaue", "Lapu-Lapu"];
   static const Map<String, List<String>> _barangaysByCity = {
     "Mandaue": [
-      "Alang-Alang", "Bakilid", "Banilad", "Basak", "Cabancalan", "Cambaro",
-      "Canduman", "Centro", "Guizo", "Ibabao-Estancia", "Jagobiao", "Labogon",
-      "Looc", "Maguikay", "Mantuyong", "Opao", "Pagsabungan", "Subangdaku",
-      "Tabok", "Tawason", "Tipolo", "Umapad",
+      "Alang-Alang",
+      "Bakilid",
+      "Banilad",
+      "Basak",
+      "Cabancalan",
+      "Cambaro",
+      "Canduman",
+      "Centro",
+      "Guizo",
+      "Ibabao-Estancia",
+      "Jagobiao",
+      "Labogon",
+      "Looc",
+      "Maguikay",
+      "Mantuyong",
+      "Opao",
+      "Pagsabungan",
+      "Subangdaku",
+      "Tabok",
+      "Tawason",
+      "Tipolo",
+      "Umapad",
     ],
     "Lapu-Lapu": [
-      "Agus", "Babag", "Bankal", "Basak", "Buaya", "Canjulao", "Gun-ob", "Ibo",
-      "Looc", "Mactan", "Maribago", "Marigondon", "Pajac", "Pajo", "Poblacion",
-      "Punta Engaño", "Pusok", "Subabasbas", "Talima", "Tingo",
+      "Agus",
+      "Babag",
+      "Bankal",
+      "Basak",
+      "Buaya",
+      "Canjulao",
+      "Gun-ob",
+      "Ibo",
+      "Looc",
+      "Mactan",
+      "Maribago",
+      "Marigondon",
+      "Pajac",
+      "Pajo",
+      "Poblacion",
+      "Punta Engaño",
+      "Pusok",
+      "Subabasbas",
+      "Talima",
+      "Tingo",
     ],
   };
 
-  String get postalCode =>
-      selectedCity == "Mandaue" ? "6014" : (selectedCity == "Lapu-Lapu" ? "6015" : "");
+  String get postalCode => selectedCity == "Mandaue"
+      ? "6014"
+      : (selectedCity == "Lapu-Lapu" ? "6015" : "");
 
   @override
   void initState() {
@@ -556,7 +563,9 @@ class _AddressFormPageState extends State<AddressFormPage> {
     final first = (a?["firstName"] ?? a?["firstname"] ?? "").toString().trim();
     final last = (a?["lastName"] ?? a?["lastname"] ?? "").toString().trim();
     final contact = (a?["contact"] ?? a?["contact_no"] ?? "").toString().trim();
-    streetController = TextEditingController(text: (a?["street"] ?? a?["street_name"] ?? "").toString().trim());
+    streetController = TextEditingController(
+      text: (a?["street"] ?? a?["street_name"] ?? "").toString().trim(),
+    );
     firstNameController = TextEditingController(text: first);
     lastNameController = TextEditingController(text: last);
     contactController = TextEditingController(text: contact);
@@ -564,14 +573,23 @@ class _AddressFormPageState extends State<AddressFormPage> {
       final city = (a["city"] ?? "").toString().trim();
       final barangay = (a["barangay"] ?? "").toString().trim();
       if (_cities.contains(city)) selectedCity = city;
-      if (selectedCity.isNotEmpty && barangay.isNotEmpty &&
+      if (selectedCity.isNotEmpty &&
+          barangay.isNotEmpty &&
           (_barangaysByCity[selectedCity] ?? []).contains(barangay)) {
         selectedBarangay = barangay;
       }
       final label = (a["label"] ?? a["label_as"] ?? "").toString();
-      if (label == "Home") selectedLabelIndex = 0;
-      else if (label == "Work") selectedLabelIndex = 1;
-      else if (label == "Other") selectedLabelIndex = 2;
+      if (label == "Home")
+        selectedLabelIndex = 0;
+      else if (label == "Work")
+        selectedLabelIndex = 1;
+      else if (label == "Other")
+        selectedLabelIndex = 2;
+      final lat = double.tryParse((a['lat'] ?? '').toString());
+      final lng = double.tryParse((a['lng'] ?? '').toString());
+      if (lat != null && lng != null) {
+        _pickedLocation = LatLng(lat, lng);
+      }
     }
   }
 
@@ -591,7 +609,9 @@ class _AddressFormPageState extends State<AddressFormPage> {
     final barangay = selectedBarangay;
     final fullAddress = street.isEmpty && city.isEmpty && barangay.isEmpty
         ? ""
-        : "$street, $barangay, ${city.isNotEmpty ? "$city City, " : ""}$_provinceCebu, $postalCode".replaceAll(RegExp(r',\s*,'), ', ').trim();
+        : "$street, $barangay, ${city.isNotEmpty ? "$city City, " : ""}$_provinceCebu, $postalCode"
+              .replaceAll(RegExp(r',\s*,'), ', ')
+              .trim();
     final map = <String, dynamic>{
       "firstName": firstNameController.text.trim(),
       "lastName": lastNameController.text.trim(),
@@ -603,6 +623,8 @@ class _AddressFormPageState extends State<AddressFormPage> {
       "postalCode": postalCode,
       "label": labels[selectedLabelIndex.clamp(0, 2)],
       "fullAddress": fullAddress,
+      if (_pickedLocation != null) "lat": _pickedLocation!.latitude,
+      if (_pickedLocation != null) "lng": _pickedLocation!.longitude,
     };
     final id = widget.initialAddress?["id"];
     if (id != null) map["id"] = id is int ? id : int.tryParse(id.toString());
@@ -628,7 +650,9 @@ class _AddressFormPageState extends State<AddressFormPage> {
               child: InkWell(
                 customBorder: const CircleBorder(),
                 onTap: () => Navigator.pop(context),
-                child: const Center(child: Icon(Icons.arrow_back, size: 20, color: Colors.black)),
+                child: const Center(
+                  child: Icon(Icons.arrow_back, size: 20, color: Colors.black),
+                ),
               ),
             ),
           ),
@@ -644,32 +668,67 @@ class _AddressFormPageState extends State<AddressFormPage> {
           ),
           child: Text(
             widget.initialAddress != null ? "Edit Address" : "Add Address",
-            style: const TextStyle(fontWeight: FontWeight.w400, fontSize: 15.69, color: Colors.black),
+            style: const TextStyle(
+              fontWeight: FontWeight.w400,
+              fontSize: 15.69,
+              color: Colors.black,
+            ),
           ),
         ),
         centerTitle: true,
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: EdgeInsets.only(left: 20, right: 20, bottom: MediaQuery.of(context).viewInsets.bottom + 10),
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 10,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_formLabel("First Name"), _formTextField(firstNameController)])),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _formLabel("First Name"),
+                        _formTextField(firstNameController),
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_formLabel("Last Name"), _formTextField(lastNameController)])),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _formLabel("Last Name"),
+                        _formTextField(lastNameController),
+                      ],
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
               _formLabel("Contact Number"),
-              _formTextField(contactController, keyboardType: TextInputType.phone),
+              _formTextField(
+                contactController,
+                keyboardType: TextInputType.phone,
+              ),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_formLabel("Province"), _formDisabledField(_provinceCebu)])),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _formLabel("Province"),
+                        _formDisabledField(_provinceCebu),
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -715,7 +774,9 @@ class _AddressFormPageState extends State<AddressFormPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _formLabel("Postal Code"),
-                        _formDisabledField(postalCode.isEmpty ? "—" : postalCode),
+                        _formDisabledField(
+                          postalCode.isEmpty ? "—" : postalCode,
+                        ),
                       ],
                     ),
                   ),
@@ -725,23 +786,11 @@ class _AddressFormPageState extends State<AddressFormPage> {
               _formLabel("Street Name, Building, House No."),
               _formTextField(streetController),
               const SizedBox(height: 8),
-              GestureDetector(
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapPickerPage())),
-                child: Container(
-                  height: 114,
-                  decoration: BoxDecoration(color: const Color(0xFFF2F2F2), borderRadius: BorderRadius.circular(12)),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 18),
-                      decoration: BoxDecoration(color: const Color(0xFFE5E5E5), borderRadius: BorderRadius.circular(8)),
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.add, color: Color(0xff949494)),
-                        SizedBox(width: 6),
-                        Text("Add Location", style: TextStyle(color: Color(0xff949494), fontSize: 12.55, fontWeight: FontWeight.w700)),
-                      ]),
-                    ),
-                  ),
-                ),
+              _locationPreviewCard(
+                initialLocation: _pickedLocation,
+                onLocationPicked: (point) {
+                  setState(() => _pickedLocation = point);
+                },
               ),
               const SizedBox(height: 6),
               _formLabel("Label as:"),
@@ -755,13 +804,31 @@ class _AddressFormPageState extends State<AddressFormPage> {
                     child: GestureDetector(
                       onTap: () => setState(() => selectedLabelIndex = index),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 15,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(8),
-                          color: isSelected ? const Color(0xFFE3001B) : Colors.white,
-                          border: Border.all(color: isSelected ? Colors.transparent : const Color(0xFFDEDEDE)),
+                          color: isSelected
+                              ? const Color(0xFFE3001B)
+                              : Colors.white,
+                          border: Border.all(
+                            color: isSelected
+                                ? Colors.transparent
+                                : const Color(0xFFDEDEDE),
+                          ),
                         ),
-                        child: Text(labels[index], style: TextStyle(color: isSelected ? Colors.white : const Color(0xFF1C1B1F), fontSize: 14, fontWeight: FontWeight.w400)),
+                        child: Text(
+                          labels[index],
+                          style: TextStyle(
+                            color: isSelected
+                                ? Colors.white
+                                : const Color(0xFF1C1B1F),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
                       ),
                     ),
                   );
@@ -771,19 +838,37 @@ class _AddressFormPageState extends State<AddressFormPage> {
               GestureDetector(
                 onTap: () {
                   if (selectedCity.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a city.'), behavior: SnackBarBehavior.floating));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please select a city.'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
                     return;
                   }
                   if (selectedBarangay.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a barangay.'), behavior: SnackBarBehavior.floating));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please select a barangay.'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
                     return;
                   }
                   Navigator.pop(context, _toSavedAddress());
                 },
                 child: Container(
                   height: 55,
-                  decoration: BoxDecoration(color: const Color(0xFFE3001B), borderRadius: BorderRadius.circular(35)),
-                  child: const Center(child: Text("Save & Continue", style: TextStyle(color: Colors.white, fontSize: 16))),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE3001B),
+                    borderRadius: BorderRadius.circular(35),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      "Save & Continue",
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -796,44 +881,92 @@ class _AddressFormPageState extends State<AddressFormPage> {
   Widget _formLabel(String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Text(text, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w400, color: Color(0xFF1C1B1F))),
-    );
-  }
-
-  Widget _formTextField(TextEditingController controller, {TextInputType keyboardType = TextInputType.text}) {
-    return Container(
-      height: 46,
-      padding: const EdgeInsets.symmetric(horizontal: 15),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xffD9D9D9))),
-      alignment: Alignment.centerLeft,
-      child: TextField(
-        controller: controller,
-        keyboardType: keyboardType,
-        style: const TextStyle(fontSize: 14, color: Color(0xFF1C1B1F), fontWeight: FontWeight.w500),
-        textAlignVertical: TextAlignVertical.center,
-        decoration: const InputDecoration(border: InputBorder.none, isCollapsed: true, contentPadding: EdgeInsets.zero),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          color: Color(0xFF1C1B1F),
+        ),
       ),
     );
   }
 
-  Widget _formDropdownWithPlaceholder(String selectedValue, List<String> items, String placeholderLabel, Function(String?) onChanged) {
+  Widget _formTextField(
+    TextEditingController controller, {
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xffD9D9D9)),
+      ),
+      alignment: Alignment.centerLeft,
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        style: const TextStyle(
+          fontSize: 14,
+          color: Color(0xFF1C1B1F),
+          fontWeight: FontWeight.w500,
+        ),
+        textAlignVertical: TextAlignVertical.center,
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          isCollapsed: true,
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+    );
+  }
+
+  Widget _formDropdownWithPlaceholder(
+    String selectedValue,
+    List<String> items,
+    String placeholderLabel,
+    Function(String?) onChanged,
+  ) {
     return Container(
       height: 46,
       padding: const EdgeInsets.symmetric(horizontal: 15),
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xffD9D9D9))),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xffD9D9D9)),
+      ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: items.contains(selectedValue) ? selectedValue : items.first,
           isExpanded: true,
           iconSize: 0,
-          icon: Transform.translate(offset: const Offset(6, 0), child: const Icon(Icons.arrow_drop_down, color: Color(0xFFACACAC), size: 26)),
+          icon: Transform.translate(
+            offset: const Offset(6, 0),
+            child: const Icon(
+              Icons.arrow_drop_down,
+              color: Color(0xFFACACAC),
+              size: 26,
+            ),
+          ),
           dropdownColor: Colors.white,
-          style: TextStyle(color: selectedValue.isEmpty ? Colors.grey : Colors.black, fontSize: 14, fontWeight: FontWeight.w500),
+          style: TextStyle(
+            color: selectedValue.isEmpty ? Colors.grey : Colors.black,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
           items: items.map((v) {
             return DropdownMenuItem<String>(
               value: v,
-              child: Text(v.isEmpty ? placeholderLabel : v, style: TextStyle(color: v.isEmpty ? Colors.grey : Colors.black, fontSize: 14)),
+              child: Text(
+                v.isEmpty ? placeholderLabel : v,
+                style: TextStyle(
+                  color: v.isEmpty ? Colors.grey : Colors.black,
+                  fontSize: 14,
+                ),
+              ),
             );
           }).toList(),
           onChanged: onChanged,
@@ -846,9 +979,126 @@ class _AddressFormPageState extends State<AddressFormPage> {
     return Container(
       height: 46,
       padding: const EdgeInsets.symmetric(horizontal: 15),
-      decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.transparent, width: 0)),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.transparent, width: 0),
+      ),
       alignment: Alignment.centerLeft,
-      child: Text(value, style: const TextStyle(fontSize: 15, color: Colors.grey)),
+      child: Text(
+        value,
+        style: const TextStyle(fontSize: 15, color: Colors.grey),
+      ),
     );
   }
+}
+
+class _LocationPreviewCard extends StatelessWidget {
+  const _LocationPreviewCard({
+    required this.initialLocation,
+    required this.onLocationPicked,
+  });
+
+  final LatLng? initialLocation;
+  final ValueChanged<LatLng> onLocationPicked;
+
+  static const LatLng _defaultLocation = LatLng(10.3400, 123.9494);
+
+  @override
+  Widget build(BuildContext context) {
+    final location = initialLocation ?? _defaultLocation;
+    return GestureDetector(
+      onTap: () async {
+        final result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MapPickerPage(
+              initialLat: initialLocation?.latitude,
+              initialLng: initialLocation?.longitude,
+            ),
+          ),
+        );
+        if (result is Map) {
+          final lat = double.tryParse((result['lat'] ?? '').toString());
+          final lng = double.tryParse((result['lng'] ?? '').toString());
+          if (lat != null && lng != null) {
+            onLocationPicked(LatLng(lat, lng));
+          }
+        }
+      },
+      child: Container(
+        height: 160,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF2F2F2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            FlutterMap(
+              options: MapOptions(
+                initialCenter: location,
+                initialZoom: 16,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.none,
+                ),
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.hricecream.app',
+                ),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: location,
+                      width: 40,
+                      height: 40,
+                      child: const Icon(
+                        Icons.location_on,
+                        size: 38,
+                        color: Color(0xFFE3001B),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            Positioned(
+              right: 10,
+              bottom: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 6,
+                  horizontal: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  initialLocation == null ? 'Set Location' : 'Change Location',
+                  style: const TextStyle(
+                    color: Color(0xFF494949),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Widget _locationPreviewCard({
+  required LatLng? initialLocation,
+  required ValueChanged<LatLng> onLocationPicked,
+}) {
+  return _LocationPreviewCard(
+    initialLocation: initialLocation,
+    onLocationPicked: onLocationPicked,
+  );
 }

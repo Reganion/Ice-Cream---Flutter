@@ -34,7 +34,7 @@ class _SignUpPageState extends State<SignUpPage> {
   final FocusNode _focusNodeEmail = FocusNode();
   final FocusNode _focusNodePassword = FocusNode();
   final FocusNode _focusNodeConfirmPassword = FocusNode();
-  bool _isGoogleLoading = false;
+  bool _isCreateLoading = false;
 
   @override
   void dispose() {
@@ -63,10 +63,6 @@ class _SignUpPageState extends State<SignUpPage> {
         _showPasswordEye = _passwordController.text.isNotEmpty;
       });
     });
-  }
-
-  Future<void> _signUpWithGoogle() async {
-    // Google Sign-In disabled; UI only.
   }
 
   @override
@@ -229,126 +225,100 @@ class _SignUpPageState extends State<SignUpPage> {
                       SizedBox(
                         height: 55,
                         child: ElevatedButton(
-                          onPressed: () async {
-                            setState(() {
-                              _firstError = _firstController.text.isEmpty;
-                              _lastError = _lastController.text.isEmpty;
-                              _emailError = _emailController.text.isEmpty;
-                              _passwordError = _passwordController.text.isEmpty;
-                              _confirmPasswordError =
-                                  _confirmPasswordController.text.isEmpty;
-                            });
+                          onPressed: _isCreateLoading
+                              ? null
+                              : () async {
+                                  setState(() {
+                                    _firstError = _firstController.text.isEmpty;
+                                    _lastError = _lastController.text.isEmpty;
+                                    _emailError = _emailController.text.isEmpty;
+                                    _passwordError =
+                                        _passwordController.text.isEmpty;
+                                    _confirmPasswordError =
+                                        _confirmPasswordController.text.isEmpty;
+                                  });
 
-                            if (_passwordController.text !=
-                                _confirmPasswordController.text) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Passwords do not match"),
-                                ),
-                              );
-                              return;
-                            }
+                                  if (_passwordController.text !=
+                                      _confirmPasswordController.text) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content:
+                                            Text("Passwords do not match"),
+                                      ),
+                                    );
+                                    return;
+                                  }
 
-                            if (!_firstError &&
-                                !_lastError &&
-                                !_emailError &&
-                                !_passwordError &&
-                                !_confirmPasswordError) {
-                              try {
-                                final result = await Auth().register(
-                                  firstName: _firstController.text.trim(),
-                                  lastName: _lastController.text.trim(),
-                                  email: _emailController.text.trim(),
-                                  password: _passwordController.text.trim(),
-                                  passwordConfirmation:
-                                      _confirmPasswordController.text.trim(),
-                                );
-                                final email = result['email'] as String? ??
-                                    _emailController.text.trim();
-                                if (!mounted) return;
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => OTPcode(email: email),
-                                  ),
-                                );
-                              } catch (e) {
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      e is Exception ? e.toString().replaceFirst('Exception: ', '') : 'Error: $e',
-                                    ),
-                                  ),
-                                );
-                              }
-                            }
-                          },
+                                  if (_firstError ||
+                                      _lastError ||
+                                      _emailError ||
+                                      _passwordError ||
+                                      _confirmPasswordError) {
+                                    return;
+                                  }
+
+                                  setState(() => _isCreateLoading = true);
+                                  try {
+                                    final result = await Auth().register(
+                                      firstName: _firstController.text.trim(),
+                                      lastName: _lastController.text.trim(),
+                                      email: _emailController.text.trim(),
+                                      password:
+                                          _passwordController.text.trim(),
+                                      passwordConfirmation:
+                                          _confirmPasswordController.text
+                                              .trim(),
+                                    );
+                                    final email = result['email'] as String? ??
+                                        _emailController.text.trim();
+                                    if (!mounted) return;
+                                    Navigator.pushReplacement(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => OTPcode(email: email),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          e is Exception
+                                              ? e.toString().replaceFirst(
+                                                  'Exception: ', '')
+                                              : 'Error: $e',
+                                        ),
+                                      ),
+                                    );
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _isCreateLoading = false);
+                                    }
+                                  }
+                                },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFE3001C),
+                            disabledBackgroundColor: const Color(0xFFE3001C),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: const Text(
-                            "Create",
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      // DIVIDER
-                      Row(
-                        children: const [
-                          Expanded(child: Divider()),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 8),
-                            child: Text("Or, Sign Up with"),
-                          ),
-                          Expanded(child: Divider()),
-                        ],
-                      ),
-                      const SizedBox(height: 30),
-
-                      SizedBox(
-                        height: 55,
-                        child: OutlinedButton(
-                          onPressed: _isGoogleLoading ? null : _signUpWithGoogle,
-                          style: OutlinedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: _isGoogleLoading
+                          child: _isCreateLoading
                               ? const SizedBox(
                                   height: 24,
                                   width: 24,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
                                 )
-                              : Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Image.asset(
-                                      'lib/client/images/CL_page/ggl.png',
-                                      height: 50,
-                                      width: 50,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    const Text(
-                                      "Sign Up with Google",
-                                      style: TextStyle(
-                                        fontSize: 14.27,
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w400,
-                                      ),
-                                    ),
-                                  ],
+                              : const Text(
+                                  "Create",
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                         ),
                       ),
@@ -666,10 +636,10 @@ class _OTPcodeState extends State<OTPcode> {
                     backgroundColor: MaterialStateProperty.resolveWith<Color>((
                       states,
                     ) {
-                      if (isFilled) {
-                        return const Color(0xFFE3001B); // active color
+                      if (!isFilled) {
+                        return const Color(0xFFFF9CA7);
                       }
-                      return const Color(0xFFFF9CA7); // disabled color
+                      return const Color(0xFFE3001B);
                     }),
                     shape: MaterialStateProperty.all(
                       RoundedRectangleBorder(
@@ -678,14 +648,23 @@ class _OTPcodeState extends State<OTPcode> {
                     ),
                     elevation: MaterialStateProperty.all(0),
                   ),
-                  child: const Text(
-                    "Continue",
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                    ),
-                  ),
+                  child: _isVerifying
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "Continue",
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.white,
+                          ),
+                        ),
                 ),
               ),
 

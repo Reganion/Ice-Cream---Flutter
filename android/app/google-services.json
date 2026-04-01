@@ -8,14 +8,22 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:74810571043:android:ab21674225793b448ab496",
+        "mobilesdk_app_id": "1:74810571043:android:df86bf27bd4461868ab496",
         "android_client_info": {
           "package_name": "com.example.ice_cream"
         }
       },
       "oauth_client": [
         {
-          "client_id": "74810571043-ubsdi2nuvfhd2hf6f75cd7upkorubfir.apps.googleusercontent.com",
+          "client_id": "74810571043-f6kf9l5uhk3k1vc3n9d7fs5d679r51tr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ice_cream",
+            "certificate_hash": "563f52d958f1d4a5d32e23583b9b36b8bb5d7751"
+          }
+        },
+        {
+          "client_id": "74810571043-tih2tdh0j35e0ef6dks1qvs2spjo5cu1.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
@@ -28,7 +36,7 @@
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "74810571043-ubsdi2nuvfhd2hf6f75cd7upkorubfir.apps.googleusercontent.com",
+              "client_id": "74810571043-tih2tdh0j35e0ef6dks1qvs2spjo5cu1.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

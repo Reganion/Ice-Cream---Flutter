@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:ice_cream/client/messages/messages.dart';
 import 'package:ice_cream/client/order/order_record.dart';
 import 'package:ice_cream/auth.dart';
 import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -24,16 +27,61 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
   String _driverPhone = '';
   String _customerContact = '—';
   bool _refreshing = false;
+  bool _trackingLoading = false;
+  String _trackingError = '';
+  final MapController _mapController = MapController();
+  double _mapZoom = 15;
+  Timer? _trackingTimer;
+  LatLng? _driverLocation;
+  LatLng? _destinationLocation;
+  List<LatLng> _routeHistory = const [];
+
+  void _recenterToTracking({
+    required LatLng? latest,
+    required LatLng? destination,
+    required List<LatLng> history,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        final points = <LatLng>[
+          ...history,
+          if (latest != null) latest,
+          if (destination != null) destination,
+        ];
+        if (points.isEmpty) return;
+        if (points.length == 1) {
+          _mapZoom = 16;
+          _mapController.move(points.first, _mapZoom);
+          return;
+        }
+        final bounds = LatLngBounds.fromPoints(points);
+        _mapController.fitCamera(
+          CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
+        );
+      } catch (_) {}
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _refreshOrder();
+    _startTrackingPolling();
   }
 
   @override
   void dispose() {
+    _trackingTimer?.cancel();
     super.dispose();
+  }
+
+  void _startTrackingPolling() {
+    _loadTracking();
+    _trackingTimer?.cancel();
+    _trackingTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      _loadTracking();
+    });
   }
 
   Future<void> _refreshOrder() async {
@@ -44,7 +92,10 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
       final uri = Uri.parse('${Auth.apiBaseUrl}/orders/${widget.order.id}');
       final res = await http.get(
         uri,
-        headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'},
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
       );
       if (!mounted) return;
       final body = jsonDecode(res.body) as Map<String, dynamic>?;
@@ -65,6 +116,181 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
+  }
+
+  double? _asDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse((value ?? '').toString());
+  }
+
+  LatLng? _latLngFromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final source = Map<String, dynamic>.from(raw);
+    final lat = _asDouble(source['lat']);
+    final lng = _asDouble(source['lng']);
+    if (lat == null || lng == null) return null;
+    return LatLng(lat, lng);
+  }
+
+  Future<void> _loadTracking() async {
+    final token = await Auth.getToken();
+    if (!mounted || token == null || token.isEmpty) return;
+    setState(() => _trackingLoading = true);
+    try {
+      final res = await http.get(
+        Uri.parse('${Auth.apiBaseUrl}/orders/${_order.id}/tracking'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (!mounted) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>?;
+      if (res.statusCode == 200 &&
+          body?['success'] == true &&
+          body?['tracking'] is Map) {
+        final tracking = Map<String, dynamic>.from(body?['tracking'] as Map);
+        final latest = _latLngFromMap(tracking['latest']);
+        final destination = _latLngFromMap(tracking['destination']);
+        final historyRaw = tracking['history'];
+        final history = <LatLng>[];
+        if (historyRaw is List) {
+          for (final point in historyRaw) {
+            final parsed = _latLngFromMap(point);
+            if (parsed != null) history.add(parsed);
+          }
+        }
+        if (latest != null &&
+            (history.isEmpty ||
+                history.last.latitude != latest.latitude ||
+                history.last.longitude != latest.longitude)) {
+          history.add(latest);
+        }
+
+        setState(() {
+          _driverLocation = latest;
+          _destinationLocation = destination;
+          _routeHistory = history;
+          _trackingError = '';
+        });
+        _recenterToTracking(
+          latest: latest,
+          destination: destination,
+          history: history,
+        );
+      } else {
+        setState(() {
+          _trackingError =
+              (body?['message'] ?? 'Tracking is unavailable right now.')
+                  .toString();
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _trackingError = 'Could not load tracking map.');
+    } finally {
+      if (mounted) {
+        setState(() => _trackingLoading = false);
+      }
+    }
+  }
+
+  LatLng get _mapCenter {
+    return _driverLocation ??
+        _destinationLocation ??
+        (_routeHistory.isNotEmpty
+            ? _routeHistory.last
+            : const LatLng(10.3157, 123.8854));
+  }
+
+  Widget _buildTrackingMap() {
+    return Stack(
+      children: [
+        FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: _mapCenter,
+            initialZoom: _mapZoom,
+            minZoom: 4,
+            maxZoom: 19,
+            onPositionChanged: (position, _) {
+              _mapZoom = position.zoom;
+            },
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.hricecream.app',
+            ),
+            if (_routeHistory.length > 1)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: _routeHistory,
+                    strokeWidth: 4,
+                    color: const Color(0xFF7051C7),
+                  ),
+                ],
+              ),
+            MarkerLayer(
+              markers: [
+                if (_destinationLocation != null)
+                  Marker(
+                    point: _destinationLocation!,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.location_on,
+                      size: 40,
+                      color: Color(0xFF007CFF),
+                    ),
+                  ),
+                if (_driverLocation != null)
+                  Marker(
+                    point: _driverLocation!,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.delivery_dining,
+                      size: 38,
+                      color: Color(0xFFE3001B),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+        if (_trackingLoading)
+          const Positioned(
+            left: 12,
+            bottom: 12,
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        if (_trackingError.isNotEmpty)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.65),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                _trackingError,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   String _pickFirstNonEmpty(List<dynamic> values) {
@@ -103,7 +329,8 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     ]);
     if (direct.isNotEmpty) return direct;
 
-    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    final nestedRaw =
+        order['driver'] ?? order['assigned_driver'] ?? order['rider'];
     if (nestedRaw is Map) {
       final nested = Map<String, dynamic>.from(nestedRaw);
       final nestedDirect = _pickFirstNonEmpty([
@@ -126,7 +353,8 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     if (direct is int) return direct;
     final fromDirect = int.tryParse((direct ?? '').toString());
     if (fromDirect != null && fromDirect > 0) return fromDirect;
-    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    final nestedRaw =
+        order['driver'] ?? order['assigned_driver'] ?? order['rider'];
     if (nestedRaw is Map) {
       final nested = Map<String, dynamic>.from(nestedRaw);
       final nestedId = nested['id'] ?? nested['driver_id'] ?? nested['user_id'];
@@ -148,7 +376,8 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     ]);
     if (direct.isNotEmpty) return direct;
 
-    final nestedRaw = order['driver'] ?? order['assigned_driver'] ?? order['rider'];
+    final nestedRaw =
+        order['driver'] ?? order['assigned_driver'] ?? order['rider'];
     if (nestedRaw is Map) {
       final nested = Map<String, dynamic>.from(nestedRaw);
       final nestedPhone = _pickFirstNonEmpty([
@@ -210,7 +439,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     if (!_canMessageDriver) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('You can only chat the driver when your order is out for delivery.'),
+          content: Text(
+            'You can only chat the driver when your order is out for delivery.',
+          ),
         ),
       );
       return;
@@ -233,7 +464,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     if (!_isOutForDelivery) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Driver call is available once your order is out for delivery.'),
+          content: Text(
+            'Driver call is available once your order is out for delivery.',
+          ),
         ),
       );
       return;
@@ -241,7 +474,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
     final phone = _driverPhone.trim();
     if (phone.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Driver phone number is not available yet.')),
+        const SnackBar(
+          content: Text('Driver phone number is not available yet.'),
+        ),
       );
       return;
     }
@@ -257,7 +492,8 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
   String get _etaLabel {
     final date = _order.deliveryDate;
     final time = _order.deliveryTime;
-    if ((date == null || date.isEmpty) && (time == null || time.isEmpty)) return 'Estimated on: —';
+    if ((date == null || date.isEmpty) && (time == null || time.isEmpty))
+      return 'Estimated on: —';
     if (date == null || date.isEmpty) return 'Estimated on: —, $time';
     if (time == null || time.isEmpty) return 'Estimated on: $date';
     return 'Estimated on: $date, $time';
@@ -316,10 +552,7 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
             height: mapHeight,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(18),
-              child: Image.asset(
-                'lib/client/order/images/map.png',
-                fit: BoxFit.cover,
-              ),
+              child: _buildTrackingMap(),
             ),
           ),
           // X (close) button - top right of map
@@ -338,9 +571,21 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _mapOverlayButton(icon: Icons.add, onTap: () {}),
+                _mapOverlayButton(
+                  icon: Icons.add,
+                  onTap: () {
+                    _mapZoom = (_mapZoom + 1).clamp(4, 19).toDouble();
+                    _mapController.move(_mapCenter, _mapZoom);
+                  },
+                ),
                 const SizedBox(height: 10),
-                _mapOverlayButton(icon: Icons.remove, onTap: () {}),
+                _mapOverlayButton(
+                  icon: Icons.remove,
+                  onTap: () {
+                    _mapZoom = (_mapZoom - 1).clamp(4, 19).toDouble();
+                    _mapController.move(_mapCenter, _mapZoom);
+                  },
+                ),
               ],
             ),
           ),
@@ -390,7 +635,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                               const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             ],
                           ],
@@ -566,11 +813,23 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                               const SizedBox(height: 8),
                               _detailRow('Flavor:', _order.productName),
                               const SizedBox(height: 3),
-                              _detailRow('Type:', _order.productType.isEmpty ? '—' : _order.productType),
+                              _detailRow(
+                                'Type:',
+                                _order.productType.isEmpty
+                                    ? '—'
+                                    : _order.productType,
+                              ),
                               const SizedBox(height: 3),
-                              _detailRow('Payment method:', _order.paymentMethod ?? '—'),
+                              _detailRow(
+                                'Payment method:',
+                                _order.paymentMethod ?? '—',
+                              ),
                               const SizedBox(height: 3),
-                              _detailRow('Delivery address:', _order.deliveryAddress ?? '—', valueMaxLines: 2),
+                              _detailRow(
+                                'Delivery address:',
+                                _order.deliveryAddress ?? '—',
+                                valueMaxLines: 2,
+                              ),
                               const SizedBox(height: 3),
                               _DetailRow(
                                 label: 'Contact number:',
@@ -626,7 +885,9 @@ class _DeliveryTrackerPageState extends State<DeliveryTrackerPage> {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   color: Colors.white,
-                                  border: Border.all(color: const Color(0xFF8B8B8B)),
+                                  border: Border.all(
+                                    color: const Color(0xFF8B8B8B),
+                                  ),
                                 ),
                                 child: Icon(
                                   Icons.call, // updated icon
@@ -670,7 +931,9 @@ class _DetailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      crossAxisAlignment: valueMaxLines > 1 ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      crossAxisAlignment: valueMaxLines > 1
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
       children: [
         SizedBox(
           width: 160,
@@ -688,10 +951,7 @@ class _DetailRow extends StatelessWidget {
             value,
             maxLines: valueMaxLines,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
         ),
       ],
